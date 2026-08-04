@@ -1,6 +1,8 @@
 [project]
 name = "inbox-pilot"
 version = "0.1.0"
+description = "An explainable email priority agent for Microsoft 365 mailboxes."
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",
@@ -11,6 +13,9 @@ dependencies = [
     "typer>=0.27.1",
 ]
 
+[project.scripts]
+inbox-agent = "inbox_agent.cli:app"
+
 [dependency-groups]
 dev = [
     "mypy>=2.3.0",
@@ -18,3 +23,40 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.16.1",
 ]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+branch = true
+source = ["inbox_agent"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+strict = true
+warn_unreachable = true
