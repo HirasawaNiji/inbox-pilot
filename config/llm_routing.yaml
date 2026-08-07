@@ -1,0 +1,10 @@
+routing_version: llm-routing-v1
+mode: selective
+confidence_threshold: 0.75
+
+route_on_rule_review: true
+route_on_ambiguous_deadline: true
+route_on_multiple_deadlines: true
+route_on_action_no_action_conflict: true
+route_on_importance_content_conflict: true
+route_on_urgent_no_action_conflict: true

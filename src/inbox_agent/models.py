@@ -41,12 +41,43 @@ class Priority(StrEnum):
     P5 = "P5"
 
 
+class MessageCategory(StrEnum):
+    """Stable category taxonomy shared by structured LLM output."""
+
+    ACADEMIC_DEADLINE = "academic_deadline"
+    ADMINISTRATIVE_DEADLINE = "administrative_deadline"
+    COURSE_REGISTRATION = "course_registration"
+    COURSE_CHANGE = "course_change"
+    COURSE_MATERIAL = "course_material"
+    EXAM_CHANGE = "exam_change"
+    SCHOLARSHIP_DEADLINE = "scholarship_deadline"
+    PAYMENT_DEADLINE = "payment_deadline"
+    SECURITY_ALERT = "security_alert"
+    LIBRARY_REMINDER = "library_reminder"
+    EVENT_REGISTRATION = "event_registration"
+    CAREER_EVENT = "career_event"
+    ACADEMIC_CALENDAR = "academic_calendar"
+    CAMPUS_ACTIVITY = "campus_activity"
+    COURTESY_MESSAGE = "courtesy_message"
+    NEWSLETTER = "newsletter"
+    PROMOTION = "promotion"
+    INCOMPLETE_MESSAGE = "incomplete_message"
+    GENERAL_NOTICE = "general_notice"
+
+
 class DecisionSource(StrEnum):
     """Component that produced the final triage decision."""
 
     RULE = "rule"
     LLM = "llm"
     HYBRID = "hybrid"
+
+
+class DeadlineKind(StrEnum):
+    """How a structured analyzer determined a deadline."""
+
+    EXPLICIT = "explicit"
+    INFERRED = "inferred"
 
 
 class FrozenModel(BaseModel):
@@ -329,6 +360,108 @@ class RuleEvaluation(FrozenModel):
         return self
 
 
+class ExtractedDeadline(FrozenModel):
+    """A timezone-aware deadline with evidence and extraction confidence."""
+
+    value: datetime
+    kind: DeadlineKind
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: str = Field(min_length=1, max_length=1_000)
+
+    @field_validator("value")
+    @classmethod
+    def validate_value(cls, value: datetime) -> datetime:
+        """Require an absolute instant even when the source text was relative."""
+
+        validated = _require_aware_datetime(value, "extracted deadline")
+        assert validated is not None
+        return validated
+
+
+class ActionItem(FrozenModel):
+    """One structured task extracted from an email."""
+
+    description: str = Field(min_length=1, max_length=1_000)
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: str | None = Field(min_length=1, max_length=1_000)
+    deadline: ExtractedDeadline | None
+
+
+class LLMMessageAnalysis(FrozenModel):
+    """Provider-neutral structured content returned by an LLM analyzer."""
+
+    priority: Priority
+    category: MessageCategory
+    summary: str = Field(min_length=1, max_length=1_000)
+    action_items: tuple[ActionItem, ...] = Field(max_length=50)
+    deadline: ExtractedDeadline | None
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str = Field(min_length=1, max_length=1_000)
+    requires_review: bool
+
+    @model_validator(mode="after")
+    def validate_unique_action_items(self) -> Self:
+        """Reject repeated task descriptions in one structured response."""
+
+        descriptions = [item.description.casefold() for item in self.action_items]
+        if len(descriptions) != len(set(descriptions)):
+            raise ValueError("LLM analysis contains duplicate action item descriptions")
+        return self
+
+
+class LLMTokenUsage(FrozenModel):
+    """Provider-neutral token accounting for one LLM request."""
+
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    cached_input_tokens: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_cached_tokens(self) -> Self:
+        """Cached input tokens must be a subset of all input tokens."""
+
+        if self.cached_input_tokens > self.input_tokens:
+            raise ValueError("cached_input_tokens must not exceed input_tokens")
+        return self
+
+    @property
+    def total_tokens(self) -> int:
+        """Return total billed input and generated output tokens."""
+
+        return self.input_tokens + self.output_tokens
+
+
+class LLMAnalysisResult(FrozenModel):
+    """Traceable runtime envelope around one structured LLM analysis."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    message_id: str = Field(min_length=1, max_length=512)
+    analysis: LLMMessageAnalysis
+
+    provider: str = Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=100)
+    model_name: str = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+        max_length=200,
+    )
+    prompt_version: str = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        max_length=100,
+    )
+    analyzed_at: datetime
+    duration_ms: int = Field(ge=0)
+    usage: LLMTokenUsage | None = None
+    request_id: str | None = Field(default=None, min_length=1, max_length=512)
+
+    @field_validator("analyzed_at")
+    @classmethod
+    def validate_analyzed_at(cls, value: datetime) -> datetime:
+        """Require timezone-aware timestamps for audit and evaluation."""
+
+        validated = _require_aware_datetime(value, "LLM analysis timestamp")
+        assert validated is not None
+        return validated
+
+
 class TriageResult(FrozenModel):
     """Stable public result consumed by the CLI, storage, and future UI."""
 
@@ -339,7 +472,7 @@ class TriageResult(FrozenModel):
 
     category: str = Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=100)
     summary: str = Field(min_length=1, max_length=1_000)
-    action_items: tuple[str, ...] = ()
+    action_items: tuple[ActionItem, ...] = Field(default=(), max_length=50)
     deadline: datetime | None = None
 
     reasons: tuple[ScoreReason, ...] = ()
