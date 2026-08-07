@@ -1,0 +1,264 @@
+{
+  "dataset_version": "1.0",
+  "source_dataset": "../samples/sample_emails.json",
+  "labels": [
+    {
+      "source_id": "sample-001-course-registration",
+      "expected_priority": "P3",
+      "expected_category": "course_registration",
+      "expected_signals": [
+        "trusted_domain",
+        "direct_recipient",
+        "deadline_language"
+      ],
+      "requires_review": false,
+      "explanation": "普通选课提醒，截止日期尚有两周，不需要立即处理。"
+    },
+    {
+      "source_id": "sample-002-assignment-deadline",
+      "expected_priority": "P1",
+      "expected_category": "academic_deadline",
+      "expected_signals": [
+        "trusted_sender",
+        "direct_recipient",
+        "deadline_language",
+        "high_importance",
+        "has_attachment"
+      ],
+      "requires_review": false,
+      "explanation": "教师直接要求在一天内补交缺失材料。"
+    },
+    {
+      "source_id": "sample-003-course-reading",
+      "expected_priority": "P3",
+      "expected_category": "course_material",
+      "expected_signals": [
+        "trusted_sender",
+        "direct_recipient"
+      ],
+      "requires_review": false,
+      "explanation": "课程相关且值得阅读，但明确说明无需提交作业。"
+    },
+    {
+      "source_id": "sample-004-teacher-greeting",
+      "expected_priority": "P4",
+      "expected_category": "courtesy_message",
+      "expected_signals": [
+        "trusted_sender",
+        "bulk_mail",
+        "no_action_required"
+      ],
+      "requires_review": false,
+      "explanation": "可信教师发件人不代表邮件一定需要处理。"
+    },
+    {
+      "source_id": "sample-005-exam-room-change",
+      "expected_priority": "P1",
+      "expected_category": "exam_change",
+      "expected_signals": [
+        "trusted_sender",
+        "bulk_mail",
+        "urgent_keyword",
+        "high_importance"
+      ],
+      "requires_review": false,
+      "explanation": "虽然是群发，但明日考试地点发生紧急变更。"
+    },
+    {
+      "source_id": "sample-006-registration-confirmation-deadline",
+      "expected_priority": "P1",
+      "expected_category": "administrative_deadline",
+      "expected_signals": [
+        "trusted_sender",
+        "bulk_mail",
+        "deadline_language",
+        "high_importance"
+      ],
+      "requires_review": false,
+      "explanation": "群发教务通知包含两天内必须完成的注册确认。"
+    },
+    {
+      "source_id": "sample-007-academic-calendar",
+      "expected_priority": "P3",
+      "expected_category": "academic_calendar",
+      "expected_signals": [
+        "trusted_sender",
+        "bulk_mail",
+        "has_attachment",
+        "no_action_required"
+      ],
+      "requires_review": false,
+      "explanation": "正式教务材料值得阅读，但不要求立即处理。"
+    },
+    {
+      "source_id": "sample-008-scholarship-supplement",
+      "expected_priority": "P1",
+      "expected_category": "scholarship_deadline",
+      "expected_signals": [
+        "trusted_domain",
+        "direct_recipient",
+        "deadline_language",
+        "high_importance"
+      ],
+      "requires_review": false,
+      "explanation": "与个人奖学金申请相关，两天内未补交将失去资格。"
+    },
+    {
+      "source_id": "sample-009-library-due-reminder",
+      "expected_priority": "P2",
+      "expected_category": "library_reminder",
+      "expected_signals": [
+        "trusted_domain",
+        "direct_recipient",
+        "deadline_language",
+        "sender_mismatch"
+      ],
+      "requires_review": false,
+      "explanation": "个人图书三天后到期，需要本周处理。"
+    },
+    {
+      "source_id": "sample-010-tuition-payment",
+      "expected_priority": "P2",
+      "expected_category": "payment_deadline",
+      "expected_signals": [
+        "trusted_domain",
+        "direct_recipient",
+        "deadline_language"
+      ],
+      "requires_review": false,
+      "explanation": "个人缴费事项需要在一周内处理。"
+    },
+    {
+      "source_id": "sample-011-club-activity",
+      "expected_priority": "P4",
+      "expected_category": "campus_activity",
+      "expected_signals": [
+        "bulk_mail",
+        "bulk_keyword",
+        "low_importance",
+        "no_action_required"
+      ],
+      "requires_review": false,
+      "explanation": "自愿参加且无需报名的普通社团活动。"
+    },
+    {
+      "source_id": "sample-012-campus-newsletter",
+      "expected_priority": "P5",
+      "expected_category": "newsletter",
+      "expected_signals": [
+        "bulk_mail",
+        "bulk_keyword",
+        "unsubscribe",
+        "low_importance"
+      ],
+      "requires_review": false,
+      "explanation": "典型订阅简报，包含退订链接且无行动要求。"
+    },
+    {
+      "source_id": "sample-013-high-importance-promotion",
+      "expected_priority": "P5",
+      "expected_category": "promotion",
+      "expected_signals": [
+        "external_sender",
+        "bulk_mail",
+        "bulk_keyword",
+        "unsubscribe",
+        "high_importance"
+      ],
+      "requires_review": false,
+      "explanation": "推广方滥用高重要性标记，不应因此提升优先级。"
+    },
+    {
+      "source_id": "sample-014-lms-assignment-deadline",
+      "expected_priority": "P1",
+      "expected_category": "academic_deadline",
+      "expected_signals": [
+        "trusted_domain",
+        "direct_recipient",
+        "deadline_language",
+        "sender_mismatch"
+      ],
+      "requires_review": false,
+      "explanation": "即使未标记高重要性，未提交且一天内截止的作业仍是 P1。"
+    },
+    {
+      "source_id": "sample-015-activity-registration-deadline",
+      "expected_priority": "P2",
+      "expected_category": "event_registration",
+      "expected_signals": [
+        "trusted_domain",
+        "bulk_mail",
+        "bulk_keyword",
+        "deadline_language"
+      ],
+      "requires_review": true,
+      "explanation": "活动是自愿的，但存在报名截止时间，属于推广与行动要求冲突案例。"
+    },
+    {
+      "source_id": "sample-016-security-alert",
+      "expected_priority": "P1",
+      "expected_category": "security_alert",
+      "expected_signals": [
+        "trusted_domain",
+        "bulk_mail",
+        "security_keyword",
+        "high_importance"
+      ],
+      "requires_review": false,
+      "explanation": "面向全校的安全警报虽然群发，仍应保持最高优先级。"
+    },
+    {
+      "source_id": "sample-017-course-cancellation",
+      "expected_priority": "P1",
+      "expected_category": "course_change",
+      "expected_signals": [
+        "trusted_domain",
+        "bulk_mail",
+        "urgent_keyword",
+        "high_importance",
+        "sender_mismatch"
+      ],
+      "requires_review": false,
+      "explanation": "当日晚间课程取消，需要学生及时看到。"
+    },
+    {
+      "source_id": "sample-018-event-brochure-attachment",
+      "expected_priority": "P4",
+      "expected_category": "campus_activity",
+      "expected_signals": [
+        "trusted_domain",
+        "bulk_mail",
+        "bulk_keyword",
+        "has_attachment",
+        "low_importance"
+      ],
+      "requires_review": false,
+      "explanation": "有附件不代表重要，附件只是自愿活动手册。"
+    },
+    {
+      "source_id": "sample-019-empty-subject-administrative",
+      "expected_priority": "P3",
+      "expected_category": "incomplete_message",
+      "expected_signals": [
+        "trusted_sender",
+        "direct_recipient",
+        "empty_subject"
+      ],
+      "requires_review": true,
+      "explanation": "可信教务处直接发送，但缺少标题和具体行动内容，需要人工复核。"
+    },
+    {
+      "source_id": "sample-020-career-fair-registration",
+      "expected_priority": "P3",
+      "expected_category": "career_event",
+      "expected_signals": [
+        "trusted_domain",
+        "bulk_mail",
+        "bulk_keyword",
+        "deadline_language"
+      ],
+      "requires_review": true,
+      "explanation": "对求职学生可能有价值，但属于自愿参加的群发活动。"
+    }
+  ]
+}

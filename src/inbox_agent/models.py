@@ -274,13 +274,21 @@ class MessageFeatures(FrozenModel):
     looks_like_bulk_mail: bool = False
 
     urgent_keywords: tuple[str, ...] = ()
+    security_keywords: tuple[str, ...] = ()
     bulk_keywords: tuple[str, ...] = ()
+    action_keywords: tuple[str, ...] = ()
+    opportunity_keywords: tuple[str, ...] = ()
+    no_action_keywords: tuple[str, ...] = ()
     contains_unsubscribe: bool = False
     contains_deadline_language: bool = False
     detected_dates: tuple[datetime, ...] = ()
 
     has_attachments: bool = False
     provider_marked_high_importance: bool = False
+    provider_marked_low_importance: bool = False
+    external_sender: bool = False
+    empty_subject: bool = False
+    sender_mismatch: bool = False
 
     @field_validator("detected_dates")
     @classmethod
