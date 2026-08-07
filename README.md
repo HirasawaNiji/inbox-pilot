@@ -15,19 +15,21 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 学生邮箱的可解释邮�
 - [x] 使用 `pyproject.toml` 和 `uv.lock` 管理依赖
 - [x] 安装阶段一运行依赖和开发依赖
 
-待完成：
+阶段一功能：
 
 - [x] 定义原始邮件、标准化邮件和分类结果模型
-- [ ] 实现 JSON 邮件加载器
-- [ ] 实现 HTML 清理与邮件标准化
-- [ ] 实现 YAML 驱动的可解释规则引擎
-- [ ] 准备匿名样例邮件
-- [ ] 实现离线分析流水线和 CLI
-- [ ] 编写单元测试
-- [ ] 配置 Ruff、mypy 和 pytest
-- [ ] 达到阶段一验收标准
+- [x] 实现 JSON 邮件加载器
+- [x] 实现 HTML 清理与邮件标准化
+- [x] 实现 YAML 驱动的可解释规则引擎
+- [x] 准备匿名样例邮件
+- [x] 实现离线分析流水线
+- [x] 完善 CLI 命令和输出
+- [x] 实现离线评测命令
+- [x] 编写单元测试
+- [x] 配置 Ruff、mypy 和 pytest
+- [x] 完成本轮阶段一验收（全新环境安装验证按计划暂缓）
 
-> 当前已完成的是阶段一的工程初始化部分，阶段一完整功能仍在开发中。
+> 阶段一离线 MVP 已通过当前范围内的最终验收；全新环境执行 `uv sync` 的验证暂缓，详见[阶段一验收报告](docs/stage1_acceptance.md)。
 
 ## 阶段一目标
 
@@ -47,6 +49,56 @@ uv run inbox-agent demo
 uv run inbox-agent analyze data/samples/sample_emails.json
 uv run pytest
 ```
+
+## CLI 使用
+
+运行内置的 20 封匿名样例邮件：
+
+```powershell
+uv run inbox-agent demo
+```
+
+显示每项可解释评分原因：
+
+```powershell
+uv run inbox-agent demo --show-reasons
+```
+
+输出机器可读的 JSON：
+
+```powershell
+uv run inbox-agent demo --format json
+```
+
+分析指定的数据集：
+
+```powershell
+uv run inbox-agent analyze data/samples/sample_emails.json
+```
+
+指定自定义 YAML 规则并输出 JSON：
+
+```powershell
+uv run inbox-agent analyze data/samples/sample_emails.json `
+  --config config/rules.yaml `
+  --format json
+```
+
+表格输出包含优先级、分数、类别、复核状态、截止时间和摘要。JSON 输出包含完整的评分原因，可用于后续评测、Web 页面或 Microsoft Graph 集成。
+
+将 Pipeline 预测与独立人工标签进行比较：
+
+```powershell
+uv run inbox-agent evaluate
+```
+
+输出机器可读的评测 JSON：
+
+```powershell
+uv run inbox-agent evaluate --format json
+```
+
+评测报告包含优先级准确率、类别准确率、人工复核一致率、P1 精确率、P1 召回率以及所有预测不一致明细。该结果只代表匿名回归数据集，不代表真实邮箱中的泛化准确率。
 
 ## 环境要求
 
@@ -124,22 +176,27 @@ inbox-pilot/
 ├── src/
 │   └── inbox_agent/
 │       ├── __init__.py       # Python 包入口
-│       ├── cli.py            # demo、analyze 等 CLI 命令
+│       ├── cli.py            # demo、analyze、evaluate 等 CLI 命令
+│       ├── evaluation.py     # 加载人工标签并计算离线评测指标
 │       ├── models.py         # 邮件、评分原因和分类结果模型
 │       ├── loader.py         # 从 JSON 加载并校验邮件
 │       ├── normalizer.py     # HTML 清理、空白处理和字段标准化
 │       ├── rule_engine.py    # 可解释的规则评分引擎
 │       └── pipeline.py       # 组织加载、标准化、评分和输出
 ├── data/
-│   └── samples/
-│       └── sample_emails.json # 虚构且匿名的演示邮件
+│   ├── samples/
+│   │   └── sample_emails.json # 虚构且匿名的演示邮件
+│   └── eval/
+│       └── expected_results.json # 与预测逻辑分离的人工期望结果
 ├── config/
 │   └── rules.yaml            # 白名单、关键词、权重和阈值
 ├── tests/
 │   ├── test_loader.py
 │   ├── test_normalizer.py
 │   ├── test_rule_engine.py
-│   └── test_pipeline.py
+│   ├── test_pipeline.py
+│   ├── test_evaluation.py
+│   └── test_cli.py
 ├── docs/                     # 架构、安全和评测文档
 ├── pyproject.toml            # 项目配置与直接依赖
 ├── uv.lock                   # 可复现依赖锁文件
@@ -151,7 +208,8 @@ inbox-pilot/
 
 `models.py`
 
-- `RawMessage`：对应 JSON 或未来 Graph API 返回的原始邮件。
+- `EmailMessage`：对应 JSON 或未来 Graph API 返回的单封原始邮件。
+- `MessageDataset`：封装带版本号的邮件集合，并阻止重复的来源 ID。
 - `NormalizedMessage`：保存清洗后、适合规则分析的数据。
 - `TriageResult`：保存 P1～P5、分数、原因及是否需要复核。
 
@@ -176,12 +234,27 @@ inbox-pilot/
 - 将分数映射为 P1～P5。
 - 为每次评分返回明确的 `reason_code`。
 
+### 修改规则配置
+
+如果需要添加可信发件人、修改关键词、调整权重或改变优先级阈值，请阅读：
+
+- [YAML 规则配置指南](docs/rules_configuration.md)
+
+该文档逐项说明了 `config/rules.yaml` 的结构、评分方式、修改注意事项和回归验证流程。
+
 `pipeline.py`
 
 - 串联加载、标准化和规则评分。
 - 隔离单封邮件异常。
 - 按优先级排序结果。
 - 为 CLI、测试和后续 Web 页面提供统一入口。
+
+`evaluation.py`
+
+- 加载并校验独立人工标签。
+- 比较优先级、类别和人工复核标记。
+- 计算准确率以及 P1 精确率、召回率。
+- 输出缺失预测、额外预测和字段不一致明细。
 
 ## 阶段一数据流
 
@@ -190,7 +263,7 @@ sample_emails.json
         │
         ▼
    JSON Loader
-        │ RawMessage
+        │ EmailMessage
         ▼
    Normalizer
         │ NormalizedMessage
@@ -270,18 +343,20 @@ uv run mypy src
 ## 阶段一验收标准
 
 - [ ] 新环境执行 `uv sync` 后可以运行项目。
-- [ ] `inbox-agent demo` 无需邮箱或 API Key 即可运行。
-- [ ] 至少包含 15 封匿名样例邮件。
-- [ ] 输入数据经过 Pydantic 校验。
-- [ ] HTML 正文可以转换为纯文本。
-- [ ] 规则配置与 Python 代码分离。
-- [ ] 每个评分变化都有可解释原因。
-- [ ] 输出支持 P1～P5 和 0～100 分。
-- [ ] 教务群发邮件不会被简单判定为低优先级。
-- [ ] 支持终端表格和 JSON 输出。
-- [ ] pytest、Ruff 和 mypy 全部通过。
-- [ ] 核心逻辑测试覆盖率达到约 80%。
-- [ ] 仓库中不存在真实邮件和凭据。
+- [x] `inbox-agent demo` 无需邮箱或 API Key 即可运行。
+- [x] 至少包含 15 封匿名样例邮件。
+- [x] 输入数据经过 Pydantic 校验。
+- [x] HTML 正文可以转换为纯文本。
+- [x] 规则配置与 Python 代码分离。
+- [x] 每个评分变化都有可解释原因。
+- [x] 输出支持 P1～P5 和 0～100 分。
+- [x] 教务群发邮件不会被简单判定为低优先级。
+- [x] 支持终端表格和 JSON 输出。
+- [x] pytest、Ruff 和 mypy 全部通过。
+- [x] 核心逻辑测试覆盖率达到约 80%。
+- [x] 仓库中不存在真实邮件和凭据。
+
+> 2026-08-07 验收结果：当前范围通过，唯一暂缓项为全新环境安装验证。
 
 ## 后续路线
 
@@ -291,7 +366,7 @@ uv run mypy src
 2. 规则与 LLM 的置信度路由。
 3. Microsoft Graph 委托登录和增量同步。
 4. 人工确认与 Outlook 分类写回。
-5. 离线评测、成本统计和演示界面。
+5. 成本统计、Web 演示界面和持续集成。
 
 ## License
 

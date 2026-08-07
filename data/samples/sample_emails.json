@@ -1,0 +1,506 @@
+{
+  "schema_version": "1.0",
+  "messages": [
+    {
+      "source": "mock",
+      "source_id": "sample-001-course-registration",
+      "internet_message_id": "<sample-001-course-registration@example.edu>",
+      "subject": "2026 秋季学期《智能系统导论》课程选课通知",
+      "from_address": {
+        "name": "示例大学教务处",
+        "address": "registrar@example.edu"
+      },
+      "sender": {
+        "name": "示例大学选课系统",
+        "address": "noreply@example.edu"
+      },
+      "reply_to": [
+        {
+          "name": "教务咨询",
+          "address": "academic-support@example.edu"
+        }
+      ],
+      "to_recipients": [
+        {
+          "name": "示例学生",
+          "address": "student@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T09:35:00+08:00",
+      "sent_at": "2026-08-07T09:30:00+08:00",
+      "body": {
+        "content_type": "html",
+        "content": "<html><head><style>.notice { color: #333; }</style></head><body><p>同学你好：</p><p>2026 秋季学期《智能系统导论》现已开放选课。本课程面向全校本科生，计划容量为 80 人。</p><p>选课开放时间：2026 年 8 月 10 日 09:00；选课截止时间：2026 年 8 月 21 日 17:00。</p><p>如有修读计划，请在选课系统中完成选课。本通知仅用于提醒，不代表你已成功选中该课程。</p><p>--</p><p>示例大学教务处</p></body></html>"
+      },
+      "body_preview": "《智能系统导论》现已开放选课，选课截止时间为 2026 年 8 月 21 日 17:00。",
+      "importance": "normal",
+      "inference_classification": "focused"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-002-assignment-deadline",
+      "internet_message_id": "<sample-002-assignment-deadline@example.edu>",
+      "subject": "【重要】课程项目报告补交提醒",
+      "from_address": {
+        "name": "示例教师张老师",
+        "address": "teacher.zhang@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "示例学生",
+          "address": "student@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T10:05:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "你提交的课程项目报告缺少实验结果部分，请在 2026 年 8 月 8 日 20:00 前补交修订版。\n--\n示例教师张老师"
+      },
+      "body_preview": "课程项目报告缺少实验结果部分，请在 8 月 8 日 20:00 前补交。",
+      "importance": "high",
+      "has_attachments": true,
+      "attachments": [
+        {
+          "name": "项目报告要求.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 184320
+        }
+      ]
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-003-course-reading",
+      "subject": "下周课程阅读材料",
+      "from_address": {
+        "name": "示例教师李老师",
+        "address": "teacher.li@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "示例学生",
+          "address": "student@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T10:30:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "下周课程将讨论智能体规划，请提前阅读课程平台中的第 3 章材料。无需提交书面作业。"
+      },
+      "body_preview": "请提前阅读课程平台中的第 3 章材料，无需提交书面作业。",
+      "importance": "normal"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-004-teacher-greeting",
+      "subject": "祝大家假期愉快",
+      "from_address": {
+        "name": "示例教师王老师",
+        "address": "teacher.wang@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "课程全体同学",
+          "address": "class-ai101@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T11:00:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "感谢大家本学期的认真参与，祝各位假期愉快、注意安全。此邮件无需回复。"
+      },
+      "body_preview": "祝各位假期愉快，此邮件无需回复。",
+      "importance": "normal"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-005-exam-room-change",
+      "subject": "【紧急】明日考试地点变更通知",
+      "from_address": {
+        "name": "示例大学教务处",
+        "address": "registrar@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "全体本科生",
+          "address": "all-undergraduates@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T11:20:00+08:00",
+      "body": {
+        "content_type": "html",
+        "content": "<p><strong>紧急通知：</strong>原定于 2026 年 8 月 8 日 09:00 在 A201 举行的《数据结构》考试，地点变更为 B305，考试时间不变。</p><p>请相互转告并提前到场。</p>"
+      },
+      "body_preview": "明日《数据结构》考试地点由 A201 变更为 B305。",
+      "importance": "high",
+      "inference_classification": "focused"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-006-registration-confirmation-deadline",
+      "subject": "学期注册信息确认截止提醒",
+      "from_address": {
+        "name": "示例大学教务处",
+        "address": "registrar@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "全体学生",
+          "address": "all-students@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T11:40:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "请所有学生在 2026 年 8 月 9 日 18:00 前登录教务系统确认学期注册信息。逾期未确认可能影响选课。"
+      },
+      "body_preview": "请在 8 月 9 日 18:00 前确认学期注册信息。",
+      "importance": "high"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-007-academic-calendar",
+      "subject": "2026—2027 学年校历发布",
+      "from_address": {
+        "name": "示例大学教务处",
+        "address": "registrar@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "全体学生",
+          "address": "all-students@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T12:00:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "2026—2027 学年校历已经发布，包含开学、考试周和假期安排，请下载附件查阅。本邮件不要求立即回复。"
+      },
+      "body_preview": "新学年校历已经发布，请下载附件查阅。",
+      "importance": "normal",
+      "has_attachments": true,
+      "attachments": [
+        {
+          "name": "2026-2027学年校历.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 276480
+        }
+      ]
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-008-scholarship-supplement",
+      "subject": "奖学金申请材料补交通知",
+      "from_address": {
+        "name": "示例大学学生资助中心",
+        "address": "financial-aid@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "示例学生",
+          "address": "student@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T13:10:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "你的奖学金申请缺少成绩证明，请在 2026 年 8 月 9 日 12:00 前上传补充材料，逾期将视为放弃申请。"
+      },
+      "body_preview": "奖学金申请缺少成绩证明，请在 8 月 9 日 12:00 前补交。",
+      "importance": "high"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-009-library-due-reminder",
+      "subject": "图书即将到期提醒",
+      "from_address": {
+        "name": "示例大学图书馆",
+        "address": "library@example.edu"
+      },
+      "sender": {
+        "name": "图书馆自动通知系统",
+        "address": "library-notify@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "示例学生",
+          "address": "student@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T13:30:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "你借阅的《人工智能：现代方法》将在 2026 年 8 月 10 日到期。如需继续阅读，请及时续借。"
+      },
+      "body_preview": "你借阅的图书将在 8 月 10 日到期。",
+      "importance": "normal"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-010-tuition-payment",
+      "subject": "秋季学期学费缴纳提醒",
+      "from_address": {
+        "name": "示例大学财务处",
+        "address": "finance@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "示例学生",
+          "address": "student@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T14:00:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "秋季学期缴费通道已经开放，请在 2026 年 8 月 14 日 17:00 前完成学费缴纳。如已缴费，请忽略本通知。"
+      },
+      "body_preview": "请在 8 月 14 日 17:00 前完成秋季学期学费缴纳。",
+      "importance": "normal"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-011-club-activity",
+      "subject": "周末桌游社开放活动邀请",
+      "from_address": {
+        "name": "示例大学社团联合会",
+        "address": "clubs@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "全体学生",
+          "address": "all-students@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T14:20:00+08:00",
+      "body": {
+        "content_type": "html",
+        "content": "<p>桌游社将在本周六下午举办开放活动，欢迎感兴趣的同学自由参加。</p><p>活动无需报名，座位先到先得。</p>"
+      },
+      "body_preview": "桌游社将在本周六下午举办开放活动。",
+      "importance": "low",
+      "inference_classification": "other"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-012-campus-newsletter",
+      "subject": "校园一周新闻简报",
+      "from_address": {
+        "name": "示例大学新闻中心",
+        "address": "newsletter@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "校园订阅用户",
+          "address": "newsletter-subscribers@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T14:35:00+08:00",
+      "body": {
+        "content_type": "html",
+        "content": "<h2>校园一周新闻</h2><p>本期包含科研动态、校园活动回顾和校友故事。</p><p><a href='https://example.edu/unsubscribe'>取消订阅 / Unsubscribe</a></p>"
+      },
+      "body_preview": "本期包含科研动态、校园活动回顾和校友故事。",
+      "importance": "low",
+      "inference_classification": "other"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-013-high-importance-promotion",
+      "subject": "【重要】限时职业培训优惠",
+      "from_address": {
+        "name": "示例培训机构",
+        "address": "offers@example.com"
+      },
+      "to_recipients": [
+        {
+          "name": "校园用户",
+          "address": "all-students@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T15:00:00+08:00",
+      "body": {
+        "content_type": "html",
+        "content": "<p>仅限今日报名可享职业培训课程五折优惠，名额有限，立即购买。</p><p>Unsubscribe from promotional emails.</p>"
+      },
+      "body_preview": "仅限今日报名可享职业培训课程五折优惠。",
+      "importance": "high",
+      "inference_classification": "other"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-014-lms-assignment-deadline",
+      "subject": "作业 3 提交截止提醒",
+      "from_address": {
+        "name": "示例大学课程平台",
+        "address": "lms@example.edu"
+      },
+      "sender": {
+        "name": "课程平台自动通知",
+        "address": "lms-notify@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "示例学生",
+          "address": "student@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T15:20:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "《机器学习基础》作业 3 将于 2026 年 8 月 8 日 23:59 截止。系统记录显示你尚未提交。"
+      },
+      "body_preview": "作业 3 将于 8 月 8 日 23:59 截止，你尚未提交。",
+      "importance": "normal"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-015-activity-registration-deadline",
+      "subject": "校园黑客松报名即将截止",
+      "from_address": {
+        "name": "示例大学学生工作处",
+        "address": "student-affairs@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "全体学生",
+          "address": "all-students@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T15:45:00+08:00",
+      "body": {
+        "content_type": "html",
+        "content": "<p>校园黑客松面向全校学生开放，获奖团队将获得项目孵化支持。</p><p>有意参加的同学请在 2026 年 8 月 12 日 18:00 前报名。活动自愿参加。</p>"
+      },
+      "body_preview": "校园黑客松报名将于 8 月 12 日 18:00 截止。",
+      "importance": "normal"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-016-security-alert",
+      "subject": "【安全警报】近期校园邮箱钓鱼邮件提醒",
+      "from_address": {
+        "name": "示例大学信息安全中心",
+        "address": "security@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "全体师生",
+          "address": "all-campus@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T16:00:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "近期发现冒充教务处的钓鱼邮件。请勿点击要求重新登录邮箱的可疑链接；如已输入密码，请立即修改密码并联系信息安全中心。"
+      },
+      "body_preview": "近期发现冒充教务处的钓鱼邮件，请勿点击可疑登录链接。",
+      "importance": "high",
+      "inference_classification": "focused"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-017-course-cancellation",
+      "subject": "今晚《自然语言处理》课程取消",
+      "from_address": {
+        "name": "示例大学计算机学院",
+        "address": "cs-department@example.edu"
+      },
+      "sender": {
+        "name": "学院通知系统",
+        "address": "department-notify@example.edu"
+      },
+      "reply_to": [
+        {
+          "name": "课程助教",
+          "address": "nlp-ta@example.edu"
+        }
+      ],
+      "to_recipients": [
+        {
+          "name": "课程全体同学",
+          "address": "class-nlp@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T16:15:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "因教师临时身体不适，原定于今晚 19:00 的《自然语言处理》课程取消，补课时间另行通知。"
+      },
+      "body_preview": "今晚 19:00 的《自然语言处理》课程取消。",
+      "importance": "high"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-018-event-brochure-attachment",
+      "subject": "国际文化周活动手册",
+      "from_address": {
+        "name": "示例大学国际交流处",
+        "address": "international@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "全体学生",
+          "address": "all-students@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T16:30:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "国际文化周活动将于下月举行，详细日程和展位介绍见附件。活动自愿参加，无需回复。"
+      },
+      "body_preview": "国际文化周活动日程和展位介绍见附件。",
+      "importance": "low",
+      "has_attachments": true,
+      "attachments": [
+        {
+          "name": "国际文化周活动手册.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 1048576
+        }
+      ]
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-019-empty-subject-administrative",
+      "subject": "",
+      "from_address": {
+        "name": "示例大学教务处",
+        "address": "registrar@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "示例学生",
+          "address": "student@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T16:45:00+08:00",
+      "body": {
+        "content_type": "text",
+        "content": "请登录教务系统查看与你相关的最新通知。"
+      },
+      "body_preview": "请登录教务系统查看最新通知。",
+      "importance": "normal"
+    },
+    {
+      "source": "mock",
+      "source_id": "sample-020-career-fair-registration",
+      "subject": "秋季实习招聘双选会报名通知",
+      "from_address": {
+        "name": "示例大学就业中心",
+        "address": "career@example.edu"
+      },
+      "to_recipients": [
+        {
+          "name": "全体学生",
+          "address": "all-students@example.edu"
+        }
+      ],
+      "received_at": "2026-08-07T17:00:00+08:00",
+      "body": {
+        "content_type": "html",
+        "content": "<p>秋季实习招聘双选会将邀请 60 家企业参加。</p><p>有求职计划的同学可在 2026 年 8 月 25 日 17:00 前预约入场。是否参加由学生自行决定。</p>"
+      },
+      "body_preview": "秋季实习招聘双选会开放预约，预约截止时间为 8 月 25 日。",
+      "importance": "normal"
+    }
+  ]
+}

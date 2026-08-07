@@ -1,0 +1,114 @@
+policy_version: rules-v1
+base_score: 30
+
+user_context:
+  mailbox_addresses:
+    - student@example.edu
+  trusted_senders:
+    - registrar@example.edu
+    - teacher.zhang@example.edu
+    - teacher.li@example.edu
+    - teacher.wang@example.edu
+    - financial-aid@example.edu
+    - student-affairs@example.edu
+    - security@example.edu
+    - lms@example.edu
+    - cs-department@example.edu
+  trusted_domains:
+    - example.edu
+  timezone: Asia/Shanghai
+
+bulk_recipient_prefixes:
+  - all-
+  - class-
+  - newsletter-
+bulk_recipient_threshold: 10
+
+keywords:
+  urgent:
+    - 紧急
+    - 补交
+    - 地点变更
+    - 课程取消
+    - 逾期
+    - 未提交
+  security:
+    - 安全警报
+    - 钓鱼
+    - 修改密码
+  bulk:
+    - 新闻简报
+    - 推广
+    - 优惠
+    - 活动
+    - 社团
+    - 招聘
+    - 双选会
+    - 文化周
+  deadline:
+    - 截止
+    - 到期
+    - 逾期
+    - 前提交
+    - 前补交
+    - 前完成
+    - 前报名
+    - 前预约
+    - 前登录
+    - 前上传
+  action:
+    - 补交
+    - 提交
+    - 确认
+    - 缴纳
+    - 报名
+    - 预约
+  opportunity:
+    - 实习
+    - 招聘
+    - 双选会
+    - 奖学金
+  no_action:
+    - 无需回复
+    - 无需提交
+    - 无需报名
+    - 不要求立即回复
+    - 自愿参加
+    - 自行决定
+    - 仅用于提醒
+    - 请忽略本通知
+  unsubscribe:
+    - unsubscribe
+    - 取消订阅
+    - 退订
+
+weights:
+  trusted_sender: 15
+  trusted_domain: 10
+  direct_recipient: 5
+  urgent_keyword: 40
+  security_keyword: 40
+  deadline_within_two_days: 35
+  deadline_within_seven_days: 20
+  deadline_later: 0
+  deadline_without_date: 5
+  action_keyword: 10
+  opportunity_keyword: 20
+  high_importance: 10
+  low_importance: -5
+  has_attachment: 10
+  bulk_mail: -10
+  bulk_keyword: -10
+  unsubscribe: -20
+  no_action_required: -5
+  external_sender: -10
+  empty_subject: -10
+  sender_mismatch: 0
+
+thresholds:
+  P1: 80
+  P2: 50
+  P3: 35
+  P4: 10
+
+review_margin: 0
