@@ -84,6 +84,20 @@ def test_missing_policy_returns_clear_error(tmp_path: Path) -> None:
     assert "does not exist" in result.stderr
 
 
+def test_missing_llm_provider_config_returns_clear_error(tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing-provider.yaml"
+
+    result = runner.invoke(
+        app,
+        ["analyze", str(DATASET_PATH), "--llm-config", str(missing_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.stderr
+    assert "LLM provider settings file does not exist" in result.stderr
+    assert str(missing_path) in result.stderr
+
+
 def test_invalid_output_format_is_rejected() -> None:
     result = runner.invoke(app, ["demo", "--format", "xml"])
 

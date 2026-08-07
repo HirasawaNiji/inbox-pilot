@@ -1,0 +1,9 @@
+fusion_version: llm-fusion-v1
+mode: conservative
+minimum_llm_confidence: 0.80
+
+allow_priority_upgrade: true
+allow_priority_downgrade: false
+force_review_on_priority_disagreement: true
+force_review_on_deadline_conflict: true
+deadline_tolerance_minutes: 0

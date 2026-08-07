@@ -6,12 +6,20 @@ import pytest
 from pydantic import ValidationError
 
 from inbox_agent.models import (
+    ActionItem,
     AttachmentMetadata,
     BodyType,
+    DeadlineKind,
+    DecisionSource,
     EmailAddress,
     EmailMessage,
+    ExtractedDeadline,
+    LLMAnalysisResult,
+    LLMMessageAnalysis,
+    LLMTokenUsage,
     MailSource,
     MessageBody,
+    MessageCategory,
     MessageDataset,
     MessageFeatures,
     Priority,
@@ -33,6 +41,34 @@ def make_message(source_id: str = "sample-001") -> EmailMessage:
         to_recipients=(EmailAddress(address="student@example.edu"),),
         received_at=datetime(2026, 8, 4, 9, 30, tzinfo=UTC),
         body=MessageBody(content_type=BodyType.TEXT, content="请查看课程通知。"),
+    )
+
+
+def make_llm_analysis() -> LLMMessageAnalysis:
+    """Build a representative structured LLM response."""
+
+    deadline = ExtractedDeadline(
+        value=datetime(2026, 8, 8, 20, 0, tzinfo=UTC),
+        kind=DeadlineKind.EXPLICIT,
+        confidence=0.98,
+        evidence="请在 2026 年 8 月 8 日 20:00 前补交",
+    )
+    return LLMMessageAnalysis(
+        priority=Priority.P1,
+        category="academic_deadline",
+        summary="课程项目报告需要补交修订版。",
+        action_items=(
+            ActionItem(
+                description="补交课程项目报告修订版",
+                confidence=0.96,
+                evidence="请补交修订版",
+                deadline=deadline,
+            ),
+        ),
+        deadline=deadline,
+        confidence=0.95,
+        rationale="邮件来自课程教师，并包含明确补交要求和截止时间。",
+        requires_review=False,
     )
 
 
@@ -186,6 +222,170 @@ def test_rule_evaluation_rejects_inconsistent_score() -> None:
                 ),
             ),
         )
+
+
+def test_extracted_deadline_requires_timezone() -> None:
+    with pytest.raises(ValidationError, match="timezone"):
+        ExtractedDeadline(
+            value=datetime(2026, 8, 8, 20, 0),
+            kind=DeadlineKind.EXPLICIT,
+            confidence=0.9,
+            evidence="8 月 8 日 20:00 前",
+        )
+
+
+def test_action_item_supports_structured_deadline_evidence() -> None:
+    analysis = make_llm_analysis()
+    action_item = analysis.action_items[0]
+
+    assert action_item.description == "补交课程项目报告修订版"
+    assert action_item.deadline == analysis.deadline
+    assert action_item.deadline is not None
+    assert action_item.deadline.kind is DeadlineKind.EXPLICIT
+
+
+def test_llm_analysis_rejects_duplicate_action_items() -> None:
+    duplicate = ActionItem(
+        description="提交申请",
+        confidence=0.8,
+        evidence=None,
+        deadline=None,
+    )
+
+    with pytest.raises(ValidationError, match="duplicate action item"):
+        LLMMessageAnalysis(
+            priority=Priority.P2,
+            category="administrative_deadline",
+            summary="申请即将截止。",
+            action_items=(
+                duplicate,
+                duplicate.model_copy(update={"description": "提交申请"}),
+            ),
+            deadline=None,
+            confidence=0.8,
+            rationale="邮件包含申请要求。",
+            requires_review=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("priority", "urgent"),
+        ("category", "Academic Deadline"),
+        ("confidence", -0.1),
+        ("confidence", 1.1),
+        ("summary", ""),
+        ("rationale", ""),
+    ],
+)
+def test_llm_analysis_rejects_invalid_output(field: str, value: object) -> None:
+    payload = make_llm_analysis().model_dump()
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        LLMMessageAnalysis.model_validate(payload)
+
+
+def test_llm_analysis_exposes_strict_json_schema() -> None:
+    schema = LLMMessageAnalysis.model_json_schema()
+
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {
+        "priority",
+        "category",
+        "summary",
+        "action_items",
+        "deadline",
+        "confidence",
+        "rationale",
+        "requires_review",
+    }
+    assert set(schema["$defs"]["ActionItem"]["required"]) == {
+        "description",
+        "confidence",
+        "evidence",
+        "deadline",
+    }
+
+    payload = make_llm_analysis().model_dump()
+    payload["unexpected_reasoning"] = "must be rejected"
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        LLMMessageAnalysis.model_validate(payload)
+
+
+def test_llm_token_usage_validates_cached_subset() -> None:
+    usage = LLMTokenUsage(
+        input_tokens=1_000,
+        output_tokens=200,
+        cached_input_tokens=800,
+    )
+
+    assert usage.total_tokens == 1_200
+
+    with pytest.raises(ValidationError, match="must not exceed"):
+        LLMTokenUsage(
+            input_tokens=100,
+            output_tokens=20,
+            cached_input_tokens=101,
+        )
+
+
+def test_llm_analysis_result_requires_traceable_metadata() -> None:
+    result = LLMAnalysisResult(
+        message_id="sample-002-assignment-deadline",
+        analysis=make_llm_analysis(),
+        provider="openai",
+        model_name="gpt-5-mini",
+        prompt_version="triage-v1",
+        analyzed_at=datetime(2026, 8, 7, 14, 30, tzinfo=UTC),
+        duration_ms=850,
+        usage=LLMTokenUsage(input_tokens=900, output_tokens=180),
+        request_id="request-example-001",
+    )
+
+    serialized = result.model_dump(mode="json")
+
+    assert serialized["schema_version"] == "1.0"
+    assert serialized["analysis"]["priority"] == "P1"
+    assert serialized["analysis"]["category"] == "academic_deadline"
+    assert serialized["analysis"]["deadline"]["kind"] == "explicit"
+    assert serialized["usage"]["input_tokens"] == 900
+
+
+def test_llm_analysis_result_rejects_naive_timestamp() -> None:
+    with pytest.raises(ValidationError, match="timezone"):
+        LLMAnalysisResult(
+            message_id="sample-001",
+            analysis=make_llm_analysis(),
+            provider="openai",
+            model_name="gpt-5-mini",
+            prompt_version="triage-v1",
+            analyzed_at=datetime(2026, 8, 7, 14, 30),
+            duration_ms=500,
+        )
+
+
+def test_triage_result_accepts_structured_action_items() -> None:
+    analysis = make_llm_analysis()
+    result = TriageResult(
+        message_id="sample-002-assignment-deadline",
+        priority=analysis.priority,
+        score=90,
+        confidence=analysis.confidence,
+        category=analysis.category,
+        summary=analysis.summary,
+        action_items=analysis.action_items,
+        deadline=analysis.deadline.value if analysis.deadline else None,
+        requires_review=analysis.requires_review,
+        decision_source=DecisionSource.LLM,
+        evaluated_at=datetime(2026, 8, 7, 14, 30, tzinfo=UTC),
+        policy_version="llm-triage-v1",
+    )
+
+    assert result.action_items[0].deadline == analysis.deadline
+    assert analysis.category is MessageCategory.ACADEMIC_DEADLINE
+    assert result.decision_source is DecisionSource.LLM
 
 
 @pytest.mark.parametrize(

@@ -28,6 +28,7 @@ logs/
 *.log
 data/private/
 token_cache*
+config/*.local.yaml
 
 # Build artifacts
 build/

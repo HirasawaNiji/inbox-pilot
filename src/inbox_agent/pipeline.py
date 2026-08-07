@@ -5,11 +5,18 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from inbox_agent.llm.fusion import LLMFusionDecision, LLMFusionEngine
+from inbox_agent.llm.provider import (
+    LLMProvider,
+    LLMProviderResultMismatchError,
+)
+from inbox_agent.llm.routing import LLMRouter, LLMRoutingDecision
 from inbox_agent.loader import load_dataset
 from inbox_agent.models import (
     DecisionSource,
     EmailMessage,
     FrozenModel,
+    LLMAnalysisResult,
     MessageDataset,
     MessageFeatures,
     NormalizedMessage,
@@ -45,6 +52,10 @@ class AnalysisReport(FrozenModel):
     evaluated_at: datetime
     results: tuple[TriageResult, ...] = ()
     failures: tuple[AnalysisFailure, ...] = ()
+    llm_analyses: tuple[LLMAnalysisResult, ...] = ()
+    llm_failures: tuple[AnalysisFailure, ...] = ()
+    llm_routing_decisions: tuple[LLMRoutingDecision, ...] = ()
+    llm_fusion_decisions: tuple[LLMFusionDecision, ...] = ()
 
     @property
     def processed_count(self) -> int:
@@ -63,6 +74,42 @@ class AnalysisReport(FrozenModel):
         """Return the number of successful results requiring review."""
 
         return sum(result.requires_review for result in self.results)
+
+    @property
+    def llm_analysis_count(self) -> int:
+        """Return the number of successful sidecar LLM analyses."""
+
+        return len(self.llm_analyses)
+
+    @property
+    def llm_failure_count(self) -> int:
+        """Return the number of isolated sidecar LLM failures."""
+
+        return len(self.llm_failures)
+
+    @property
+    def llm_routed_count(self) -> int:
+        """Return how many messages the router selected for LLM analysis."""
+
+        return sum(decision.should_analyze for decision in self.llm_routing_decisions)
+
+    @property
+    def llm_skipped_count(self) -> int:
+        """Return how many messages the router skipped."""
+
+        return sum(not decision.should_analyze for decision in self.llm_routing_decisions)
+
+    @property
+    def llm_fused_count(self) -> int:
+        """Return how many successful analyses changed public results."""
+
+        return sum(decision.applied for decision in self.llm_fusion_decisions)
+
+    @property
+    def llm_sidecar_only_count(self) -> int:
+        """Return how many successful analyses remained sidecar-only."""
+
+        return sum(not decision.applied for decision in self.llm_fusion_decisions)
 
 
 def _searchable_text(message: NormalizedMessage) -> str:
@@ -142,17 +189,68 @@ def _rule_confidence(requires_review: bool) -> float:
     return 0.6 if requires_review else 0.9
 
 
+def _failure_record(
+    message_id: str,
+    stage: str,
+    error: Exception,
+) -> AnalysisFailure:
+    """Convert an exception into one bounded, serializable failure."""
+
+    return AnalysisFailure(
+        message_id=message_id,
+        stage=stage,
+        error_type=type(error).__name__,
+        error_message=str(error)[:500] or "Unknown analysis error",
+    )
+
+
 class OfflinePipeline:
     """Coordinate deterministic analysis while isolating per-message failures."""
 
-    def __init__(self, engine: RuleEngine) -> None:
+    def __init__(
+        self,
+        engine: RuleEngine,
+        llm_provider: LLMProvider | None = None,
+        llm_router: LLMRouter | None = None,
+        llm_fusion: LLMFusionEngine | None = None,
+    ) -> None:
         self.engine = engine
+        self.llm_provider = llm_provider
+        self.llm_router = llm_router or (LLMRouter() if llm_provider is not None else None)
+        self.llm_fusion = llm_fusion or (LLMFusionEngine() if llm_provider is not None else None)
 
     @classmethod
-    def from_yaml(cls, policy_path: str | Path) -> OfflinePipeline:
-        """Construct the pipeline from one YAML rule policy."""
+    def from_yaml(
+        cls,
+        policy_path: str | Path,
+        *,
+        llm_provider: LLMProvider | None = None,
+        llm_router: LLMRouter | None = None,
+        llm_routing_path: str | Path | None = None,
+        llm_fusion: LLMFusionEngine | None = None,
+        llm_fusion_path: str | Path | None = None,
+    ) -> OfflinePipeline:
+        """Construct the pipeline from rule and optional routing policies."""
 
-        return cls(RuleEngine.from_yaml(policy_path))
+        if llm_router is not None and llm_routing_path is not None:
+            raise ValueError("provide either llm_router or llm_routing_path, not both")
+        if llm_fusion is not None and llm_fusion_path is not None:
+            raise ValueError("provide either llm_fusion or llm_fusion_path, not both")
+        configured_router = (
+            LLMRouter.from_yaml(llm_routing_path) if llm_routing_path is not None else llm_router
+        )
+        configured_fusion = (
+            LLMFusionEngine.from_yaml(llm_fusion_path)
+            if llm_fusion_path is not None
+            else llm_fusion
+        )
+
+        return cls(
+            RuleEngine.from_yaml(policy_path),
+            llm_provider,
+            configured_router,
+            configured_fusion,
+        )
 
     def analyze_message(
         self,
@@ -191,21 +289,58 @@ class OfflinePipeline:
         run_time = evaluated_at or datetime.now(UTC)
         successful: list[tuple[datetime, TriageResult]] = []
         failures: list[AnalysisFailure] = []
+        llm_analyses: dict[str, LLMAnalysisResult] = {}
+        llm_failures: list[AnalysisFailure] = []
+        llm_routing_decisions: dict[str, LLMRoutingDecision] = {}
+        llm_fusion_decisions: dict[str, LLMFusionDecision] = {}
 
         for message in dataset.messages:
             try:
                 normalized, result = self.analyze_message(message, run_time)
             except Exception as error:  # noqa: BLE001 - dataset isolation is intentional
-                failures.append(
-                    AnalysisFailure(
-                        message_id=message.source_id,
-                        stage="message_analysis",
-                        error_type=type(error).__name__,
-                        error_message=str(error)[:500] or "Unknown analysis error",
-                    )
-                )
+                failures.append(_failure_record(message.source_id, "message_analysis", error))
                 continue
             successful.append((normalized.received_at, result))
+
+            if self.llm_provider is not None:
+                assert self.llm_router is not None
+                try:
+                    features = self.engine.extract_features(normalized)
+                    routing_decision = self.llm_router.decide(result, features)
+                except Exception as error:  # noqa: BLE001 - sidecar isolation is intentional
+                    llm_failures.append(_failure_record(normalized.source_id, "llm_routing", error))
+                    continue
+                llm_routing_decisions[normalized.source_id] = routing_decision
+                if not routing_decision.should_analyze:
+                    continue
+
+                try:
+                    llm_result = self.llm_provider.analyze(normalized)
+                    if llm_result.message_id != normalized.source_id:
+                        raise LLMProviderResultMismatchError(
+                            self.llm_provider.provider_name,
+                            normalized.source_id,
+                            f"returned message_id {llm_result.message_id!r}",
+                        )
+                except Exception as error:  # noqa: BLE001 - sidecar isolation is intentional
+                    llm_failures.append(
+                        _failure_record(normalized.source_id, "llm_analysis", error)
+                    )
+                else:
+                    llm_analyses[normalized.source_id] = llm_result
+                    assert self.llm_fusion is not None
+                    try:
+                        fused_result, fusion_decision = self.llm_fusion.fuse(
+                            result,
+                            llm_result,
+                        )
+                    except Exception as error:  # noqa: BLE001 - sidecar isolation is intentional
+                        llm_failures.append(
+                            _failure_record(normalized.source_id, "llm_fusion", error)
+                        )
+                    else:
+                        successful[-1] = (normalized.received_at, fused_result)
+                        llm_fusion_decisions[normalized.source_id] = fusion_decision
 
         successful.sort(
             key=lambda item: (
@@ -222,6 +357,22 @@ class OfflinePipeline:
             evaluated_at=run_time,
             results=tuple(result for _, result in successful),
             failures=tuple(failures),
+            llm_analyses=tuple(
+                llm_analyses[result.message_id]
+                for _, result in successful
+                if result.message_id in llm_analyses
+            ),
+            llm_failures=tuple(llm_failures),
+            llm_routing_decisions=tuple(
+                llm_routing_decisions[result.message_id]
+                for _, result in successful
+                if result.message_id in llm_routing_decisions
+            ),
+            llm_fusion_decisions=tuple(
+                llm_fusion_decisions[result.message_id]
+                for _, result in successful
+                if result.message_id in llm_fusion_decisions
+            ),
         )
 
     def analyze_file(
@@ -243,8 +394,20 @@ def analyze_file(
     policy_path: str | Path,
     *,
     evaluated_at: datetime | None = None,
+    llm_provider: LLMProvider | None = None,
+    llm_router: LLMRouter | None = None,
+    llm_routing_path: str | Path | None = None,
+    llm_fusion: LLMFusionEngine | None = None,
+    llm_fusion_path: str | Path | None = None,
 ) -> AnalysisReport:
     """Convenience entry point used by the CLI and future integrations."""
 
-    pipeline = OfflinePipeline.from_yaml(policy_path)
+    pipeline = OfflinePipeline.from_yaml(
+        policy_path,
+        llm_provider=llm_provider,
+        llm_router=llm_router,
+        llm_routing_path=llm_routing_path,
+        llm_fusion=llm_fusion,
+        llm_fusion_path=llm_fusion_path,
+    )
     return pipeline.analyze_file(dataset_path, evaluated_at=evaluated_at)

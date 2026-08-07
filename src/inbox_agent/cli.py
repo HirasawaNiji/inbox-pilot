@@ -1,4 +1,4 @@
-"""Command-line interface for the offline InboxPilot workflow."""
+"""Command-line interface for offline rules and optional LLM analysis."""
 
 from __future__ import annotations
 
@@ -17,6 +17,12 @@ from inbox_agent.evaluation import (
     evaluate_analysis,
     load_expected_results,
 )
+from inbox_agent.llm import (
+    LLMFusionPolicyError,
+    LLMProviderConfigurationError,
+    LLMRoutingPolicyError,
+    OpenAICompatibleProvider,
+)
 from inbox_agent.loader import DatasetLoadError
 from inbox_agent.models import TriageResult
 from inbox_agent.pipeline import AnalysisReport, analyze_file
@@ -26,6 +32,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET_PATH = PROJECT_ROOT / "data" / "samples" / "sample_emails.json"
 DEFAULT_POLICY_PATH = PROJECT_ROOT / "config" / "rules.yaml"
 DEFAULT_EXPECTED_PATH = PROJECT_ROOT / "data" / "eval" / "expected_results.json"
+DEFAULT_LLM_ROUTING_PATH = PROJECT_ROOT / "config" / "llm_routing.yaml"
+DEFAULT_LLM_FUSION_PATH = PROJECT_ROOT / "config" / "llm_fusion.yaml"
 
 
 class OutputFormat(StrEnum):
@@ -37,7 +45,7 @@ class OutputFormat(StrEnum):
 
 app = typer.Typer(
     name="inbox-agent",
-    help="Analyze email priority with explainable offline rules.",
+    help="Analyze email priority with explainable rules and an optional LLM.",
     invoke_without_command=True,
 )
 
@@ -92,6 +100,14 @@ def _render_table(report: AnalysisReport, *, show_reasons: bool) -> None:
         f"待复核 [bold]{report.review_count}[/bold] · "
         f"失败 [bold]{report.failure_count}[/bold]"
     )
+    if report.llm_routing_decisions:
+        console.print(
+            f"LLM 路由 [bold]{report.llm_routed_count}[/bold] · "
+            f"跳过 [bold]{report.llm_skipped_count}[/bold] · "
+            f"成功 [bold]{report.llm_analysis_count}[/bold] · "
+            f"融合 [bold]{report.llm_fused_count}[/bold] · "
+            f"失败 [bold]{report.llm_failure_count}[/bold]"
+        )
 
     if show_reasons:
         for result in report.results:
@@ -110,6 +126,19 @@ def _render_table(report: AnalysisReport, *, show_reasons: bool) -> None:
         failure_table.add_column("Stage")
         failure_table.add_column("Error")
         for failure in report.failures:
+            failure_table.add_row(
+                failure.message_id,
+                failure.stage,
+                f"{failure.error_type}: {failure.error_message}",
+            )
+        console.print(failure_table)
+
+    if report.llm_failures:
+        failure_table = Table(title="LLM Analysis Failures")
+        failure_table.add_column("Message ID")
+        failure_table.add_column("Stage")
+        failure_table.add_column("Error")
+        for failure in report.llm_failures:
             failure_table.add_row(
                 failure.message_id,
                 failure.stage,
@@ -181,12 +210,32 @@ def _run(
     policy_path: Path,
     output_format: OutputFormat,
     show_reasons: bool,
+    llm_config_path: Path | None = None,
+    llm_routing_path: Path = DEFAULT_LLM_ROUTING_PATH,
+    llm_fusion_path: Path = DEFAULT_LLM_FUSION_PATH,
 ) -> None:
     """Execute one CLI analysis with consistent error and exit handling."""
 
     try:
-        report = analyze_file(dataset_path, policy_path)
-    except (DatasetLoadError, RulePolicyError) as error:
+        llm_provider = (
+            OpenAICompatibleProvider.from_yaml(llm_config_path)
+            if llm_config_path is not None
+            else None
+        )
+        report = analyze_file(
+            dataset_path,
+            policy_path,
+            llm_provider=llm_provider,
+            llm_routing_path=llm_routing_path if llm_provider is not None else None,
+            llm_fusion_path=llm_fusion_path if llm_provider is not None else None,
+        )
+    except (
+        DatasetLoadError,
+        RulePolicyError,
+        LLMProviderConfigurationError,
+        LLMRoutingPolicyError,
+        LLMFusionPolicyError,
+    ) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error
 
@@ -195,7 +244,7 @@ def _run(
     else:
         _render_table(report, show_reasons=show_reasons)
 
-    if report.failure_count:
+    if report.failure_count or report.llm_failure_count:
         raise typer.Exit(code=2)
 
 
@@ -246,10 +295,33 @@ def analyze(
         bool,
         typer.Option("--show-reasons", help="Show every score contribution in table mode."),
     ] = False,
+    llm_config_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--llm-config",
+            help="Path to a local OpenAI/DeepSeek provider YAML file.",
+        ),
+    ] = None,
+    llm_routing_path: Annotated[
+        Path,
+        typer.Option("--llm-routing-config", help="Path to the LLM routing YAML policy."),
+    ] = DEFAULT_LLM_ROUTING_PATH,
+    llm_fusion_path: Annotated[
+        Path,
+        typer.Option("--llm-fusion-config", help="Path to the LLM fusion YAML policy."),
+    ] = DEFAULT_LLM_FUSION_PATH,
 ) -> None:
-    """Analyze a JSON email dataset with an explainable YAML policy."""
+    """Analyze email JSON with rules and an optional real LLM provider."""
 
-    _run(dataset_path, policy_path, output_format, show_reasons)
+    _run(
+        dataset_path,
+        policy_path,
+        output_format,
+        show_reasons,
+        llm_config_path,
+        llm_routing_path,
+        llm_fusion_path,
+    )
 
 
 @app.command()
