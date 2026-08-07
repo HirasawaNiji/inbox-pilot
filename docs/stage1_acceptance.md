@@ -5,16 +5,18 @@
 - 项目：InboxPilot
 - 阶段：阶段一——离线 MVP
 - 验收日期：2026-08-07
-- 验收结论：当前范围通过
-- 暂缓项：全新环境执行 `uv sync` 后运行项目
+- 验收结论：全部通过
+- 暂缓项：无
 
-本轮按照 README 中的阶段一验收标准执行。根据当前开发安排，全新环境安装验证不纳入本轮验收，其余项目均已验证。
+本轮按照 README 中的阶段一验收标准执行。自动化质量、离线功能、隐私检查和全新隔离环境安装验证均已通过。
 
 ## 自动化质量结果
 
 | 检查 | 命令 | 结果 |
 | --- | --- | --- |
-| 单元测试与分支覆盖率 | `uv run pytest --cov=src/inbox_agent --cov-report=term-missing` | 90 项通过，总覆盖率 96% |
+| 全新环境安装 | `uv sync --locked` | 在独立工作目录和全新虚拟环境中安装成功 |
+| 全新环境冒烟测试 | `uv run inbox-agent demo` | 成功处理 20 封邮件，失败 0 |
+| 单元测试与分支覆盖率 | `uv run pytest --cov=src/inbox_agent --cov-report=term-missing` | 90 项通过，总覆盖率 96.10% |
 | 代码规范 | `uv run ruff check .` | 通过 |
 | 代码格式 | `uv run ruff format --check .` | 通过 |
 | 静态类型 | `uv run mypy src` | 通过 |
@@ -47,14 +49,19 @@
 - `.env`、令牌缓存、私有数据目录、日志、虚拟环境和测试缓存均已加入 `.gitignore`。
 - 阶段一不连接 Microsoft 365，不读取或修改真实邮箱。
 
-## 暂缓项
+## 全新环境验证
 
-尚未在一个没有现有 `.venv` 和依赖缓存的全新目录或机器中执行：
+项目已在同一台电脑上的独立 Git Worktree、全新 `.venv` 和隔离依赖缓存中执行：
 
 ```powershell
-uv sync
+uv sync --locked
 uv run inbox-agent demo
+uv run inbox-agent evaluate
 uv run pytest
 ```
 
-该项不影响本轮离线功能验收结论，但应在首次发布或配置 CI 前补做。完成后可勾选 README 中最后一个未完成的验收项。
+安装、CLI 冒烟测试、离线评测和自动化测试全部通过。测试 Worktree、虚拟环境和隔离缓存已在验证后删除，不依赖原项目的 `.venv`。
+
+## 最终结论
+
+阶段一离线 MVP 的全部验收项已于 2026-08-07 完成。项目可以进入结构化 LLM 与 Microsoft Graph 集成等后续阶段。
