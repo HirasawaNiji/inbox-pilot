@@ -1,16 +1,30 @@
 """Command-line integration tests for InboxPilot."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
+from typing import Any
 
 from typer.testing import CliRunner
 
 from inbox_agent.cli import app
+from inbox_agent.graph import GraphAccessToken, GraphSyncReport
 
 ROOT = Path(__file__).resolve().parents[1]
 DATASET_PATH = ROOT / "data" / "samples" / "sample_emails.json"
 POLICY_PATH = ROOT / "config" / "rules.yaml"
 runner = CliRunner()
+GRAPH_CLIENT_ID = "12345678-1234-4234-8234-123456789abc"
+
+
+def write_graph_config(tmp_path: Path) -> Path:
+    path = tmp_path / "graph.local.yaml"
+    path.write_text(
+        f"client_id: {GRAPH_CLIENT_ID}\naccount_audience: consumers\nscopes: [Mail.Read]\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_demo_runs_bundled_dataset() -> None:
@@ -96,6 +110,93 @@ def test_missing_llm_provider_config_returns_clear_error(tmp_path: Path) -> None
     assert "Error:" in result.stderr
     assert "LLM provider settings file does not exist" in result.stderr
     assert str(missing_path) in result.stderr
+
+
+def test_outlook_login_reports_missing_local_config(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["outlook", "login", "--config", str(tmp_path / "missing.yaml")],
+    )
+
+    assert result.exit_code == 1
+    assert "Graph settings file does not exist" in result.stderr
+
+
+def test_outlook_login_uses_delegated_provider_without_printing_token(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, settings: object, project_root: Path) -> FakeProvider:
+            return cls()
+
+        def login(self, display_message: object) -> GraphAccessToken:
+            return GraphAccessToken("secret-token", "student@outlook.com")
+
+    monkeypatch.setattr("inbox_agent.cli.GraphTokenProvider", FakeProvider)
+
+    result = runner.invoke(
+        app,
+        ["outlook", "login", "--config", str(write_graph_config(tmp_path))],
+    )
+
+    assert result.exit_code == 0
+    assert "student@outlook.com" in result.stdout
+    assert "Mail.Read (read-only)" in result.stdout
+    assert "secret-token" not in result.stdout
+
+
+def test_outlook_sync_outputs_machine_readable_private_report(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, settings: object, project_root: Path) -> FakeProvider:
+            return cls()
+
+        def acquire_silent(self) -> GraphAccessToken:
+            return GraphAccessToken("secret-token")
+
+    class FakeSynchronizer:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def sync(self, token: GraphAccessToken) -> GraphSyncReport:
+            return GraphSyncReport(
+                started_from_delta=False,
+                completed=True,
+                pages_fetched=1,
+                created_count=2,
+                updated_count=0,
+                removed_count=0,
+                unchanged_count=0,
+                total_messages=2,
+                dataset_path=Path("data/private/outlook_inbox.json"),
+                state_path=Path("data/private/graph_sync_state.json"),
+            )
+
+    monkeypatch.setattr("inbox_agent.cli.GraphTokenProvider", FakeProvider)
+    monkeypatch.setattr("inbox_agent.cli.GraphInboxSynchronizer", FakeSynchronizer)
+
+    result = runner.invoke(
+        app,
+        [
+            "outlook",
+            "sync",
+            "--config",
+            str(write_graph_config(tmp_path)),
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["completed"] is True
+    assert payload["created_count"] == 2
+    assert payload["dataset_path"].replace("\\", "/") == "data/private/outlook_inbox.json"
 
 
 def test_invalid_output_format_is_rejected() -> None:
