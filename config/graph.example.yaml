@@ -1,0 +1,15 @@
+# Copy to config/graph.local.yaml and replace only the client_id.
+# Never add a client secret: InboxPilot is a delegated public client.
+client_id: 00000000-0000-0000-0000-000000000000
+account_audience: consumers
+scopes:
+  - Mail.Read
+
+mail_folder: inbox
+initial_sync_days: 30
+page_size: 50
+request_timeout_seconds: 30
+
+token_cache_path: data/private/msal_token_cache.bin
+sync_state_path: data/private/graph_sync_state.json
+dataset_path: data/private/outlook_inbox.json

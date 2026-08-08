@@ -4,9 +4,9 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 学生邮箱场景的可解�
 
 ## 项目状态
 
-**阶段一：离线 MVP 已完成并通过验收。阶段二：智能分析主体已完成，邮箱接入待开始。**
+**阶段一：离线 MVP 已完成并通过验收。阶段二：智能分析和 Microsoft Graph 只读同步已完成，并通过个人 Outlook 真实环境验收。**
 
-当前版本尚未连接 Outlook，也不会读取或修改真实邮箱。默认流程仍完全离线；在用户显式提供本地 YAML 配置和环境变量 API Key 后，可选择调用 OpenAI 或 DeepSeek 分析匿名 JSON 邮件。
+默认流程仍完全离线；用户显式创建本地 Graph 配置并完成授权后，可以只读同步个人 Outlook 收件箱。当前没有写回、移动、删除或发送邮件的能力。另在显式提供本地 LLM 配置和环境变量 API Key 后，可选择调用 OpenAI 或 DeepSeek 分析邮件。
 
 阶段一成果：
 
@@ -14,7 +14,7 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 学生邮箱场景的可解�
 - P1～P5 优先级、0～100 分、稳定类别、摘要、截止时间和人工复核标记；
 - 每次分数变化均包含原因代码、说明、变化值和匹配内容；
 - `demo`、`analyze`、`evaluate` 三个 CLI 命令，支持表格和 JSON 输出；
-- 当前 181 项自动化测试全部通过，总覆盖率 95.08%，最低门槛为 80%；
+- 当前 225 项自动化测试全部通过，总覆盖率 93.24%，最低门槛为 80%；
 - pytest、Ruff、格式检查、mypy 和全新隔离环境安装验证全部通过。
 
 详细证据见[阶段一验收报告](docs/stage1_acceptance.md)。
@@ -38,10 +38,12 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 学生邮箱场景的可解�
 
 - [x] 根据规则置信度和冲突信号决定是否调用 LLM，并记录可解释路由原因；
 - [x] 保守融合规则与 LLM 判断，阻止静默降级，并对优先级、截止时间和置信度冲突强制复核；
-- [ ] 通过 Microsoft Graph 实现委托登录和只读增量同步；
+- [x] 实现 Microsoft Graph 委托登录、OS 加密令牌缓存和只读 Delta 增量同步；
+- [x] 将 Graph 邮件严格转换为现有数据模型，不下载附件，并把真实数据隔离在 `data/private/`；
+- [x] 使用个人 Outlook Client ID 完成设备码登录、首次同步、增量同步和 Pipeline 分析验收；
 - [ ] 在明确授权后加入 Outlook 分类写回。
 
-下一步进入 Microsoft Graph 委托登录与只读同步。
+Microsoft Graph 真实环境验收已于 2026-08-08 完成。其他开发者可按照[个人 Outlook 只读同步指南](docs/microsoft_graph_sync.md)连接自己的邮箱。
 
 ## 快速开始
 
@@ -130,6 +132,19 @@ uv run inbox-agent evaluate --format json
 ```
 
 评测报告包含优先级准确率、类别准确率、人工复核一致率、P1 精确率、P1 召回率和不一致明细。样例数据集上的 100% 结果用于防止规则回归，不代表真实邮箱中的泛化准确率。
+
+### `outlook`：登录与只读同步
+
+先复制 Graph 配置模板，并把个人 Entra 应用的 Client ID 写入本地配置：
+
+```powershell
+Copy-Item config/graph.example.yaml config/graph.local.yaml
+uv run inbox-agent outlook login --config config/graph.local.yaml
+uv run inbox-agent outlook sync --config config/graph.local.yaml
+uv run inbox-agent analyze data/private/outlook_inbox.json
+```
+
+`graph.local.yaml`、令牌缓存、Delta 状态和真实邮件均由 `.gitignore` 排除。完整的应用注册、字段说明、安全检查和验收步骤见[个人 Outlook 只读同步指南](docs/microsoft_graph_sync.md)。
 
 ### CLI 退出码
 
@@ -223,6 +238,18 @@ uv run inbox-agent evaluate --format json
 
 详细字段、切换方法和首次安全测试步骤见[OpenAI / DeepSeek Provider 配置指南](docs/llm_provider.md)。
 
+### Microsoft Graph 只读同步
+
+- 使用 MSAL 设备代码流进行委托登录，不保存邮箱密码，也不使用 Client Secret；
+- 权限配置被限制为 `Mail.Read`，HTTP 边界只允许访问 Graph 邮件 Delta 端点并发送 `GET` 请求；
+- 令牌缓存使用操作系统安全存储加密，且与同步状态、真实邮件一起保存在 `data/private/`；
+- 首次读取最近指定天数的 Inbox 邮件，随后通过 Delta Link 增量处理新增、更新和移除；
+- 请求 Immutable ID 以减少邮件移动导致的 ID 变化；
+- Graph 响应经严格 Pydantic 校验后映射为现有 `EmailMessage`，只记录附件存在性，不下载附件；
+- 只有完整分页且所有邮件均转换成功才推进 Delta 状态，避免部分失败造成永久漏信。
+
+实现同时通过模拟 Graph 响应的离线测试，以及个人 Outlook 的设备码登录、首次分页同步、Delta 增量同步和 Pipeline 分析验收。连接自己的邮箱请阅读[Microsoft Graph 个人 Outlook 只读同步指南](docs/microsoft_graph_sync.md)。
+
 ### 可解释 LLM 调用路由
 
 - `config/llm_routing.yaml` 配置选择性/全量模式、置信度阈值和六项路由开关；
@@ -296,7 +323,8 @@ inbox-pilot/
 │   ├── rules.yaml                        # 可信地址、关键词、权重和阈值
 │   ├── llm_routing.yaml                  # LLM 置信度与冲突路由
 │   ├── llm_fusion.yaml                   # 规则与 LLM 安全融合
-│   └── llm_provider.example.yaml         # OpenAI / DeepSeek 公开配置模板
+│   ├── llm_provider.example.yaml         # OpenAI / DeepSeek 公开配置模板
+│   └── graph.example.yaml                # 个人 Outlook 只读同步配置模板
 ├── data/
 │   ├── samples/
 │   │   ├── sample_emails.json            # 阶段一 20 封规则回归邮件
@@ -311,11 +339,13 @@ inbox-pilot/
 │   ├── llm_fusion.md                     # 规则与 LLM 受控融合指南
 │   ├── llm_provider.md                   # 真实 Provider 配置与安全指南
 │   ├── llm_routing.md                    # LLM 调用路由配置指南
+│   ├── microsoft_graph_sync.md            # 个人 Outlook 应用注册与同步指南
 │   ├── rules_configuration.md            # YAML 规则修改指南
 │   └── stage1_acceptance.md              # 阶段一验收报告
 ├── src/inbox_agent/
-│   ├── cli.py                     # demo、analyze、evaluate
+│   ├── cli.py                     # demo、analyze、evaluate、outlook
 │   ├── evaluation.py              # 离线指标与不一致明细
+│   ├── graph/                      # MSAL 登录、Graph GET、映射与 Delta 同步
 │   ├── llm/                        # Provider、离线 Fake 与分类 Prompt
 │   ├── loader.py                  # JSON 读取与校验
 │   ├── models.py                  # Pydantic 数据模型
@@ -382,14 +412,15 @@ uv run mypy src
 
 - 演示邮件必须完全虚构，并使用 `example.edu`、`example.com` 等保留域名；
 - 不得提交真实姓名、学号、邮箱地址、邮件正文或学校内部链接；
-- 阶段一不连接 Microsoft 365，不需要邮箱密码、客户端密钥或访问令牌；
+- 阶段一不连接 Microsoft 365；Graph 接入也不需要邮箱密码或客户端密钥，只使用委托访问令牌；
 - `.venv`、本地令牌、私有数据、日志和工具缓存不得提交到 Git；
-- 后续 Microsoft Graph 集成默认采用委托权限、最小权限和只读模式；
+- Microsoft Graph 集成采用委托权限、`Mail.Read` 最小权限和只读模式；
+- Graph 本地配置、加密令牌缓存、Delta 状态和真实邮件默认保存在 Git 忽略路径；
 - 群发只是一项信号，教务、考试和紧急安全通知即使群发也可以保持高优先级。
 
 ## 当前限制
 
-- 尚未连接 Microsoft 365 / Outlook；
+- Microsoft Graph 已通过个人 Outlook 验收，但尚未验证组织租户策略、共享邮箱和其他邮件文件夹；
 - 已接入 OpenAI / DeepSeek API，但尚未使用真实邮箱数据进行泛化评测；
 - 当前规则和评测数据主要面向中文高校邮件场景；
 - 离线回归指标不能代表真实邮箱中的泛化表现。
@@ -397,9 +428,10 @@ uv run mypy src
 ## 后续路线
 
 1. [x] 接入真实结构化 LLM Provider，并保留独立语义数据集评测；
-2. [ ] 通过 Microsoft Graph 实现委托登录和只读增量同步；
-3. [ ] 加入人工确认，并在明确授权后写回 Outlook 分类；
-4. [ ] 增加成本统计、Web 演示界面和 GitHub Actions 持续集成。
+2. [x] 实现 Microsoft Graph 委托登录和只读增量同步；
+3. [x] 使用个人 Outlook 账号完成 Graph 真实环境验收；
+4. [ ] 加入人工确认，并在明确授权后写回 Outlook 分类；
+5. [ ] 增加成本统计、Web 演示界面和 GitHub Actions 持续集成。
 
 ## License
 

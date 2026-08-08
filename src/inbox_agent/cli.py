@@ -7,6 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -16,6 +17,17 @@ from inbox_agent.evaluation import (
     ExpectedResultsLoadError,
     evaluate_analysis,
     load_expected_results,
+)
+from inbox_agent.graph import (
+    GraphAuthenticationError,
+    GraphInboxSynchronizer,
+    GraphMailClient,
+    GraphRequestError,
+    GraphSettingsError,
+    GraphSyncReport,
+    GraphSyncStorageError,
+    GraphTokenProvider,
+    load_graph_settings,
 )
 from inbox_agent.llm import (
     LLMFusionPolicyError,
@@ -34,6 +46,7 @@ DEFAULT_POLICY_PATH = PROJECT_ROOT / "config" / "rules.yaml"
 DEFAULT_EXPECTED_PATH = PROJECT_ROOT / "data" / "eval" / "expected_results.json"
 DEFAULT_LLM_ROUTING_PATH = PROJECT_ROOT / "config" / "llm_routing.yaml"
 DEFAULT_LLM_FUSION_PATH = PROJECT_ROOT / "config" / "llm_fusion.yaml"
+DEFAULT_GRAPH_PATH = PROJECT_ROOT / "config" / "graph.local.yaml"
 
 
 class OutputFormat(StrEnum):
@@ -48,6 +61,8 @@ app = typer.Typer(
     help="Analyze email priority with explainable rules and an optional LLM.",
     invoke_without_command=True,
 )
+outlook_app = typer.Typer(help="Authenticate and synchronize a personal Outlook Inbox read-only.")
+app.add_typer(outlook_app, name="outlook")
 
 
 def _console() -> Console:
@@ -205,6 +220,36 @@ def _render_evaluation_json(report: EvaluationReport) -> None:
     )
 
 
+def _render_graph_sync_table(report: GraphSyncReport) -> None:
+    """Render one read-only Outlook synchronization summary."""
+
+    table = Table(title="InboxPilot Outlook Read-only Sync")
+    table.add_column("指标")
+    table.add_column("结果", justify="right")
+    table.add_row("同步模式", "增量" if report.started_from_delta else "初始")
+    table.add_row("完成", "是" if report.completed else "否")
+    table.add_row("Graph 页面", str(report.pages_fetched))
+    table.add_row("新增", str(report.created_count))
+    table.add_row("更新", str(report.updated_count))
+    table.add_row("移除", str(report.removed_count))
+    table.add_row("未变化", str(report.unchanged_count))
+    table.add_row("本地邮件总数", str(report.total_messages))
+    table.add_row("映射失败", str(len(report.failures)))
+    _console().print(table)
+    _console().print(f"私有数据集：[bold]{report.dataset_path}[/bold]")
+
+    if report.failures:
+        failure_table = Table(title="Outlook Mapping Failures")
+        failure_table.add_column("Message ID")
+        failure_table.add_column("Error")
+        for failure in report.failures:
+            failure_table.add_row(
+                failure.message_id,
+                f"{failure.error_type}: {failure.error_message}",
+            )
+        _console().print(failure_table)
+
+
 def _run(
     dataset_path: Path,
     policy_path: Path,
@@ -322,6 +367,72 @@ def analyze(
         llm_routing_path,
         llm_fusion_path,
     )
+
+
+@outlook_app.command("login")
+def outlook_login(
+    graph_config_path: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Path to a local Microsoft Graph YAML file."),
+    ] = DEFAULT_GRAPH_PATH,
+) -> None:
+    """Sign in to personal Outlook with delegated Mail.Read device code."""
+
+    try:
+        settings = load_graph_settings(graph_config_path)
+        provider = GraphTokenProvider.from_settings(settings, PROJECT_ROOT)
+        token = provider.login(typer.echo)
+    except (GraphSettingsError, GraphAuthenticationError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    account = token.username or "personal Microsoft account"
+    typer.echo(f"Outlook delegated login succeeded for {account}.")
+    typer.echo("Granted connector scope: Mail.Read (read-only).")
+
+
+@outlook_app.command("sync")
+def outlook_sync(
+    graph_config_path: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Path to a local Microsoft Graph YAML file."),
+    ] = DEFAULT_GRAPH_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Synchronize personal Outlook Inbox changes using read-only Graph GET requests."""
+
+    try:
+        settings = load_graph_settings(graph_config_path)
+        provider = GraphTokenProvider.from_settings(settings, PROJECT_ROOT)
+        token = provider.acquire_silent()
+        with httpx.Client() as http_client:
+            client = GraphMailClient(settings, http_client)
+            report = GraphInboxSynchronizer(settings, client, PROJECT_ROOT).sync(token)
+    except (
+        GraphSettingsError,
+        GraphAuthenticationError,
+        GraphRequestError,
+        GraphSyncStorageError,
+    ) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    if output_format is OutputFormat.JSON:
+        typer.echo(
+            json.dumps(
+                report.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        _render_graph_sync_table(report)
+
+    if not report.completed:
+        raise typer.Exit(code=2)
 
 
 @app.command()
