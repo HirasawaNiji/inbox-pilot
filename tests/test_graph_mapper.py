@@ -25,6 +25,8 @@ def graph_message() -> dict[str, object]:
         "bodyPreview": "Hello",
         "importance": "high",
         "inferenceClassification": "focused",
+        "categories": ["School", "Important"],
+        "changeKey": "change-key-001",
         "hasAttachments": True,
     }
 
@@ -41,6 +43,8 @@ def test_mapper_builds_provider_neutral_email_message() -> None:
     assert message.body.content == "<p>Hello</p>"
     assert message.has_attachments is True
     assert message.attachments == ()
+    assert message.categories == ("School", "Important")
+    assert message.change_key == "change-key-001"
 
 
 def test_mapper_rejects_missing_sender_and_unknown_fields() -> None:

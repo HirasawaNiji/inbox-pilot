@@ -168,6 +168,8 @@ class EmailMessage(FrozenModel):
 
     importance: Importance = Importance.NORMAL
     inference_classification: Literal["focused", "other"] | None = None
+    categories: tuple[str, ...] = Field(default=(), max_length=100)
+    change_key: str | None = Field(default=None, min_length=1, max_length=512)
 
     has_attachments: bool = False
     attachments: tuple[AttachmentMetadata, ...] = ()
@@ -178,6 +180,21 @@ class EmailMessage(FrozenModel):
         """Require timezone-aware provider timestamps."""
 
         return _require_aware_datetime(value, "message datetime")
+
+    @field_validator("categories")
+    @classmethod
+    def validate_categories(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Preserve provider categories while rejecting empty or ambiguous names."""
+
+        normalized = tuple(value.strip() for value in values)
+        if any(not value for value in normalized):
+            raise ValueError("message categories must not be empty")
+        if any(len(value) > 255 for value in normalized):
+            raise ValueError("message categories must not exceed 255 characters")
+        casefolded = [value.casefold() for value in normalized]
+        if len(casefolded) != len(set(casefolded)):
+            raise ValueError("message categories must be unique ignoring case")
+        return normalized
 
     @property
     def effective_sender(self) -> EmailAddress:

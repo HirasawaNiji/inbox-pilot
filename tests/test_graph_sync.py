@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 import httpx
 
@@ -36,6 +37,8 @@ def graph_message(message_id: str, subject: str) -> dict[str, object]:
         "bodyPreview": "Hello",
         "importance": "normal",
         "inferenceClassification": "focused",
+        "categories": ["School"],
+        "changeKey": f"change-{message_id}",
         "hasAttachments": False,
     }
 
@@ -93,6 +96,9 @@ def test_initial_sync_follows_pages_and_writes_private_dataset_and_state(tmp_pat
     ]
     state = json.loads((tmp_path / "data/private/graph_sync_state.json").read_text("utf-8"))
     assert state["delta_link"].endswith("checkpoint-1")
+    assert state["query_contract_version"] == "2.0"
+    assert state["message_id_type"] == "restImmutableEntryId"
+    assert report.message_id_type == "restImmutableEntryId"
 
 
 def test_incremental_sync_reuses_delta_updates_and_removes_messages(tmp_path: Path) -> None:
@@ -166,3 +172,41 @@ def test_mapping_failure_keeps_previous_delta_checkpoint(tmp_path: Path) -> None
     assert report.failures[0].message_id == "invalid-message"
     preserved = json.loads(state_path.read_text("utf-8"))
     assert preserved["delta_link"].endswith("old")
+
+
+def test_legacy_delta_state_forces_fresh_write_safety_query(tmp_path: Path) -> None:
+    state_path = tmp_path / "data/private/graph_sync_state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "message_id_type": "restImmutableEntryId",
+                "mail_folder": "inbox",
+                "delta_link": f"{BASE_URL}?$deltatoken=legacy-without-category-fields",
+                "synchronized_at": "2026-08-08T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(unquote(str(request.url)))
+        return httpx.Response(
+            200,
+            json={
+                "value": [],
+                "@odata.deltaLink": f"{BASE_URL}?$deltatoken=current-contract",
+            },
+        )
+
+    report = synchronizer(tmp_path, httpx.MockTransport(handler)).sync(GraphAccessToken("token"))
+
+    assert report.started_from_delta is False
+    assert len(requested_urls) == 1
+    assert "changeKey" in requested_urls[0]
+    assert "categories" in requested_urls[0]
+    migrated = json.loads(state_path.read_text("utf-8"))
+    assert migrated["query_contract_version"] == "2.0"
+    assert migrated["delta_link"].endswith("current-contract")

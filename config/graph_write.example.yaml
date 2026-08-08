@@ -1,0 +1,13 @@
+# Copy to config/graph_write.local.yaml only after reviewing Mail.ReadWrite.
+# Never add a client secret: InboxPilot is a delegated public client.
+client_id: 00000000-0000-0000-0000-000000000000
+account_audience: consumers
+scopes:
+  - Mail.ReadWrite
+
+# Keep false until the Entra permission and local safety boundary are reviewed.
+write_enabled: false
+request_timeout_seconds: 30
+
+# This fixed cache is intentionally separate from the Mail.Read token cache.
+token_cache_path: data/private/msal_write_token_cache.bin

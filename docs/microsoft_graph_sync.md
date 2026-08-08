@@ -123,6 +123,12 @@ uv run inbox-agent analyze data/private/outlook_inbox.json
 
 Graph 邮件 ID 使用 Immutable ID 首选项，降低邮件在文件夹中移动后 ID 改变造成重复记录的风险。
 
+### Delta 查询契约升级
+
+同步状态包含 `query_contract_version`。当前版本为 `2.0`，表示初始 Delta 查询已经请求后续安全分类写入所需的 `categories` 和 `changeKey`。
+
+Microsoft Graph 的 Delta Link 会保留初始请求的查询参数。若本地状态来自尚未选择这两个字段的旧版本，InboxPilot 会忽略旧 Delta Link，并在下一次 `outlook sync` 时自动执行新的只读初始同步。现有 `outlook_inbox.json` 不会被删除，只有一次完整同步成功后才会保存新版本状态。
+
 ## 6. 安全检查
 
 提交代码前运行：

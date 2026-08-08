@@ -1,4 +1,4 @@
-"""Read-only Microsoft Graph authentication and Outlook synchronization."""
+"""Microsoft Graph authentication, read synchronization, and constrained writes."""
 
 from inbox_agent.graph.auth import (
     GraphAccessToken,
@@ -10,6 +10,8 @@ from inbox_agent.graph.auth import (
     GraphTokenProvider,
 )
 from inbox_agent.graph.client import (
+    GRAPH_IMMUTABLE_ID_PREFER,
+    GRAPH_MESSAGE_ID_TYPE,
     GraphAuthorizationError,
     GraphDeltaPage,
     GraphMailClient,
@@ -26,7 +28,10 @@ from inbox_agent.graph.config import (
     GraphSettingsReadError,
     GraphSettingsValidationError,
     GraphSettingsYAMLError,
+    GraphWriteDisabledError,
+    GraphWriteSettings,
     load_graph_settings,
+    load_graph_write_settings,
 )
 from inbox_agent.graph.mapper import map_graph_message
 from inbox_agent.graph.sync import (
@@ -36,12 +41,29 @@ from inbox_agent.graph.sync import (
     GraphSyncState,
     GraphSyncStorageError,
 )
+from inbox_agent.graph.write_client import (
+    GRAPH_MESSAGE_ENDPOINT,
+    GraphCategoryWriteClient,
+    GraphCategoryWriteRequest,
+    GraphCategoryWriteResult,
+    GraphMessageCategorySnapshot,
+    GraphWriteConflictError,
+    GraphWriteOutcomeUnknownError,
+    GraphWriteRedirectRejectedError,
+)
 
 __all__ = [
+    "GRAPH_IMMUTABLE_ID_PREFER",
+    "GRAPH_MESSAGE_ID_TYPE",
+    "GRAPH_MESSAGE_ENDPOINT",
     "GraphAccessToken",
     "GraphAccountAudience",
     "GraphAuthenticationError",
     "GraphAuthorizationError",
+    "GraphCategoryWriteClient",
+    "GraphCategoryWriteRequest",
+    "GraphCategoryWriteResult",
+    "GraphMessageCategorySnapshot",
     "GraphDeltaPage",
     "GraphDeviceFlowError",
     "GraphLoginRequiredError",
@@ -54,6 +76,11 @@ __all__ = [
     "GraphSettingsReadError",
     "GraphSettingsValidationError",
     "GraphSettingsYAMLError",
+    "GraphWriteDisabledError",
+    "GraphWriteConflictError",
+    "GraphWriteOutcomeUnknownError",
+    "GraphWriteRedirectRejectedError",
+    "GraphWriteSettings",
     "GraphInboxSynchronizer",
     "GraphSyncFailure",
     "GraphSyncReport",
@@ -65,5 +92,6 @@ __all__ = [
     "GraphThrottledError",
     "GraphURLRejectedError",
     "load_graph_settings",
+    "load_graph_write_settings",
     "map_graph_message",
 ]

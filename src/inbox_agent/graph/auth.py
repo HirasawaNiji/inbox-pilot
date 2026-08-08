@@ -13,7 +13,7 @@ from msal_extensions import (  # type: ignore[import-untyped]
     build_encrypted_persistence,
 )
 
-from inbox_agent.graph.config import GraphSettings
+from inbox_agent.graph.config import GraphSettings, GraphWriteSettings
 
 
 class PublicClientProtocol(Protocol):
@@ -114,16 +114,23 @@ def _token_from_result(result: Mapping[str, object]) -> GraphAccessToken:
 
 
 class GraphTokenProvider:
-    """Acquire delegated Mail.Read tokens silently or through device code."""
+    """Acquire delegated Graph tokens silently or through device code."""
 
-    def __init__(self, app: PublicClientProtocol, scopes: Sequence[str]) -> None:
+    def __init__(
+        self,
+        app: PublicClientProtocol,
+        scopes: Sequence[str],
+        *,
+        login_command: str = "outlook login",
+    ) -> None:
         self._app = app
         self._scopes = tuple(scopes)
+        self._login_command = login_command
 
     @classmethod
     def from_settings(
         cls,
-        settings: GraphSettings,
+        settings: GraphSettings | GraphWriteSettings,
         project_root: Path,
     ) -> GraphTokenProvider:
         """Build MSAL with an OS-encrypted, locked token cache under data/private."""
@@ -142,18 +149,28 @@ class GraphTokenProvider:
             raise GraphTokenCacheError(
                 f"Unable to initialize encrypted MSAL token cache: {type(error).__name__}"
             ) from error
-        return cls(cast(PublicClientProtocol, app), settings.scopes)
+        login_command = (
+            "outlook write-login" if isinstance(settings, GraphWriteSettings) else "outlook login"
+        )
+        return cls(
+            cast(PublicClientProtocol, app),
+            settings.scopes,
+            login_command=login_command,
+        )
 
     def acquire_silent(self) -> GraphAccessToken:
         """Return a cached/refreshed token without presenting an interactive prompt."""
 
         accounts = self._app.get_accounts()
         if not accounts:
-            raise GraphLoginRequiredError("No cached Outlook account; run outlook login first")
+            raise GraphLoginRequiredError(
+                f"No cached Outlook account; run {self._login_command} first"
+            )
         result = self._app.acquire_token_silent(list(self._scopes), account=accounts[0])
         if result is None:
             raise GraphLoginRequiredError(
-                "Cached Outlook account cannot provide Mail.Read; run outlook login again"
+                "Cached Outlook account cannot provide the configured Graph scope; "
+                f"run {self._login_command} again"
             )
         return _token_from_result(result)
 

@@ -9,6 +9,14 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from inbox_agent.actions import (
+    ActionGraphExecutionOutcome,
+    ActionGraphExecutionReport,
+    ActionQueueRepository,
+    ActionReconciliationOutcome,
+    ActionReconciliationReport,
+    MailboxActionStatus,
+)
 from inbox_agent.cli import app
 from inbox_agent.graph import GraphAccessToken, GraphSyncReport
 from inbox_agent.llm import FakeLLMProvider, OpenAICompatibleProvider
@@ -25,6 +33,18 @@ def write_graph_config(tmp_path: Path) -> Path:
     path = tmp_path / "graph.local.yaml"
     path.write_text(
         f"client_id: {GRAPH_CLIENT_ID}\naccount_audience: consumers\nscopes: [Mail.Read]\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_graph_write_config(tmp_path: Path, *, enabled: bool) -> Path:
+    path = tmp_path / "graph_write.local.yaml"
+    path.write_text(
+        f"client_id: {GRAPH_CLIENT_ID}\n"
+        "account_audience: consumers\n"
+        "scopes: [Mail.ReadWrite]\n"
+        f"write_enabled: {str(enabled).lower()}\n",
         encoding="utf-8",
     )
     return path
@@ -148,6 +168,61 @@ def test_outlook_login_uses_delegated_provider_without_printing_token(
     assert "student@outlook.com" in result.stdout
     assert "Mail.Read (read-only)" in result.stdout
     assert "secret-token" not in result.stdout
+
+
+def test_outlook_write_login_stops_before_provider_when_disabled(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    class ForbiddenProvider:
+        @classmethod
+        def from_settings(cls, settings: object, project_root: Path) -> ForbiddenProvider:
+            raise AssertionError("provider must not be created while write access is disabled")
+
+    monkeypatch.setattr("inbox_agent.cli.GraphTokenProvider", ForbiddenProvider)
+
+    result = runner.invoke(
+        app,
+        [
+            "outlook",
+            "write-login",
+            "--config",
+            str(write_graph_write_config(tmp_path, enabled=False)),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "write_enabled: true" in result.stderr
+
+
+def test_outlook_write_login_authorizes_without_mailbox_write(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, settings: object, project_root: Path) -> FakeProvider:
+            return cls()
+
+        def login(self, display_message: object) -> GraphAccessToken:
+            return GraphAccessToken("write-secret-token", "student@outlook.com")
+
+    monkeypatch.setattr("inbox_agent.cli.GraphTokenProvider", FakeProvider)
+
+    result = runner.invoke(
+        app,
+        [
+            "outlook",
+            "write-login",
+            "--config",
+            str(write_graph_write_config(tmp_path, enabled=True)),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Mail.ReadWrite (delegated)" in result.stdout
+    assert "No Microsoft Graph mailbox write request was sent" in result.stdout
+    assert "write-secret-token" not in result.stdout
 
 
 def test_outlook_sync_outputs_machine_readable_private_report(
@@ -314,3 +389,588 @@ def test_no_command_displays_help() -> None:
     assert "analyze" in result.stdout
     assert "evaluate" in result.stdout
     assert "validate-llm" in result.stdout
+    assert "actions" in result.stdout
+
+
+def test_actions_build_list_show_and_review_are_local(tmp_path: Path) -> None:
+    queue_path = tmp_path / "data/private/action_queue.json"
+    audit_path = tmp_path / "data/private/audit/actions.jsonl"
+    build = runner.invoke(
+        app,
+        [
+            "actions",
+            "build",
+            "--dataset",
+            str(DATASET_PATH),
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+        ],
+    )
+
+    assert build.exit_code == 0
+    assert "生成动作" in build.stdout
+    assert "50" in build.stdout
+    queue_payload = json.loads(queue_path.read_text(encoding="utf-8"))
+    first_id = queue_payload["actions"][0]["action_id"]
+    second_id = queue_payload["actions"][1]["action_id"]
+
+    listed = runner.invoke(
+        app,
+        ["actions", "list", "--queue", str(queue_path), "--format", "json"],
+    )
+    assert listed.exit_code == 0
+    assert len(json.loads(listed.stdout)["actions"]) == 50
+
+    shown = runner.invoke(
+        app,
+        ["actions", "show", first_id, "--queue", str(queue_path), "--format", "json"],
+    )
+    assert shown.exit_code == 0
+    assert json.loads(shown.stdout)["action_id"] == first_id
+
+    approved = runner.invoke(
+        app,
+        [
+            "actions",
+            "approve",
+            first_id,
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+        ],
+    )
+    rejected = runner.invoke(
+        app,
+        [
+            "actions",
+            "reject",
+            second_id,
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+            "--reason",
+            "测试拒绝",
+        ],
+    )
+    assert approved.exit_code == 0
+    assert "approved" in approved.stdout
+    assert rejected.exit_code == 0
+    assert "rejected" in rejected.stdout
+
+    updated = json.loads(queue_path.read_text(encoding="utf-8"))
+    statuses = {action["action_id"]: action["status"] for action in updated["actions"]}
+    assert statuses[first_id] == "approved"
+    assert statuses[second_id] == "rejected"
+    audit_lines = audit_path.read_text(encoding="utf-8").splitlines()
+    assert len(audit_lines) == 52
+    assert all("message_id_sha256" in json.loads(line) for line in audit_lines)
+
+
+def test_actions_show_missing_id_returns_clear_error(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["actions", "show", "action-missing", "--queue", str(tmp_path / "queue.json")],
+    )
+
+    assert result.exit_code == 1
+    assert "does not exist" in result.stderr
+
+
+def test_actions_apply_requires_dry_run_and_never_changes_queue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_path = tmp_path / "data/private/action_queue.json"
+    audit_path = tmp_path / "data/private/audit/actions.jsonl"
+    build = runner.invoke(
+        app,
+        [
+            "actions",
+            "build",
+            "--dataset",
+            str(DATASET_PATH),
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+        ],
+    )
+    assert build.exit_code == 0
+    payload = json.loads(queue_path.read_text(encoding="utf-8"))
+    action_id = payload["actions"][0]["action_id"]
+    approved = runner.invoke(
+        app,
+        [
+            "actions",
+            "approve",
+            action_id,
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+        ],
+    )
+    assert approved.exit_code == 0
+    queue_before = queue_path.read_bytes()
+
+    def forbidden_graph_client(*args: object, **kwargs: object) -> None:
+        raise AssertionError("dry-run must not construct GraphMailClient")
+
+    monkeypatch.setattr("inbox_agent.cli.GraphMailClient", forbidden_graph_client)
+
+    missing_flag = runner.invoke(
+        app,
+        [
+            "actions",
+            "apply",
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+        ],
+    )
+    dry_run = runner.invoke(
+        app,
+        [
+            "actions",
+            "apply",
+            "--dry-run",
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+            "--format",
+            "json",
+        ],
+    )
+
+    assert missing_flag.exit_code == 1
+    assert "only actions apply --dry-run" in missing_flag.stderr
+    assert dry_run.exit_code == 0
+    report = json.loads(dry_run.stdout)
+    assert report["eligible_count"] == 1
+    assert report["graph_write_request_count"] == 0
+    assert queue_path.read_bytes() == queue_before
+    audit_events = [
+        json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert sum(event["event_type"] == "dry_run_planned" for event in audit_events) == 1
+
+
+def test_actions_rollback_requires_succeeded_action_and_never_writes_graph(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_path = tmp_path / "data/private/action_queue.json"
+    audit_path = tmp_path / "data/private/audit/actions.jsonl"
+    build = runner.invoke(
+        app,
+        [
+            "actions",
+            "build",
+            "--dataset",
+            str(DATASET_PATH),
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+        ],
+    )
+    assert build.exit_code == 0
+    repository = ActionQueueRepository(queue_path)
+    first = repository.load().actions[0]
+    approved = runner.invoke(
+        app,
+        [
+            "actions",
+            "approve",
+            first.action_id,
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+        ],
+    )
+    assert approved.exit_code == 0
+    approved_action = repository.load().find(first.action_id)
+    assert approved_action is not None
+    assert approved_action.idempotency_key is not None
+    repository.claim_execution(first.action_id, approved_action.idempotency_key)
+    repository.complete_execution(first.action_id, approved_action.idempotency_key)
+    queue_before = queue_path.read_bytes()
+
+    def forbidden_graph_client(*args: object, **kwargs: object) -> None:
+        raise AssertionError("rollback dry-run must not construct GraphMailClient")
+
+    monkeypatch.setattr("inbox_agent.cli.GraphMailClient", forbidden_graph_client)
+    missing_flag = runner.invoke(
+        app,
+        [
+            "actions",
+            "rollback",
+            first.action_id,
+            "--reason",
+            "Classification was incorrect",
+            "--queue",
+            str(queue_path),
+        ],
+    )
+    dry_run = runner.invoke(
+        app,
+        [
+            "actions",
+            "rollback",
+            first.action_id,
+            "--reason",
+            "Classification was incorrect",
+            "--dry-run",
+            "--queue",
+            str(queue_path),
+            "--audit-log",
+            str(audit_path),
+            "--format",
+            "json",
+        ],
+    )
+
+    assert missing_flag.exit_code == 1
+    assert "only actions rollback --dry-run" in missing_flag.stderr
+    assert dry_run.exit_code == 0
+    report = json.loads(dry_run.stdout)
+    assert report["plan"]["source_status"] == MailboxActionStatus.SUCCEEDED
+    assert report["graph_write_request_count"] == 0
+    assert queue_path.read_bytes() == queue_before
+    audit_events = [
+        json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert sum(event["event_type"] == "rollback_dry_run_planned" for event in audit_events) == 1
+
+
+@pytest.mark.parametrize("confirmation", [None, "another-action"])
+def test_actions_execute_confirmation_gate_precedes_all_graph_and_queue_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    confirmation: str | None,
+) -> None:
+    queue_path = tmp_path / "action_queue.json"
+    queue_path.write_text('{"unchanged": true}', encoding="utf-8")
+    queue_before = queue_path.read_bytes()
+
+    def forbidden_config_load(*args: object, **kwargs: object) -> None:
+        raise AssertionError("confirmation gate must run before configuration loading")
+
+    monkeypatch.setattr("inbox_agent.cli.load_graph_write_settings", forbidden_config_load)
+    arguments = [
+        "actions",
+        "execute",
+        "action-one",
+        "--idempotency-key",
+        "key-one",
+        "--queue",
+        str(queue_path),
+    ]
+    if confirmation is not None:
+        arguments.extend(["--confirm-action", confirmation])
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1
+    assert "write confirmation denied" in result.stderr
+    assert "No Graph request was sent" in result.stderr
+    assert queue_path.read_bytes() == queue_before
+
+
+def test_actions_execute_uses_silent_auth_and_exactly_one_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, settings: object, project_root: Path) -> FakeProvider:
+            calls["provider_settings"] = settings
+            calls["project_root"] = project_root
+            return cls()
+
+        def acquire_silent(self) -> GraphAccessToken:
+            calls["silent_auth"] = True
+            return GraphAccessToken("secret-token")
+
+        def login(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("execute must never start interactive login")
+
+    class FakeGraphClient:
+        def __init__(self, settings: object, http_client: object) -> None:
+            calls["graph_client_settings"] = settings
+
+    class FakeExecutor:
+        def __init__(self, repository: object, graph_client: object, audit_log: object) -> None:
+            calls["executor_created"] = True
+
+        def execute(
+            self,
+            action_id: str,
+            idempotency_key: str,
+            token: GraphAccessToken,
+        ) -> ActionGraphExecutionReport:
+            calls["execute_args"] = (action_id, idempotency_key, token.access_token)
+            return ActionGraphExecutionReport(
+                action_id=action_id,
+                outcome=ActionGraphExecutionOutcome.SUCCEEDED,
+                final_status=MailboxActionStatus.SUCCEEDED,
+                attempt_number=1,
+                graph_read_request_count=1,
+                graph_write_request_count=1,
+            )
+
+    monkeypatch.setattr("inbox_agent.cli.GraphTokenProvider", FakeProvider)
+    monkeypatch.setattr("inbox_agent.cli.GraphCategoryWriteClient", FakeGraphClient)
+    monkeypatch.setattr("inbox_agent.cli.ApprovedActionGraphExecutor", FakeExecutor)
+    action_id = "action-one"
+    result = runner.invoke(
+        app,
+        [
+            "actions",
+            "execute",
+            action_id,
+            "--idempotency-key",
+            "key-one",
+            "--confirm-action",
+            action_id,
+            "--graph-config",
+            str(write_graph_write_config(tmp_path, enabled=True)),
+            "--queue",
+            str(tmp_path / "queue.json"),
+            "--audit-log",
+            str(tmp_path / "audit.jsonl"),
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["outcome"] == "succeeded"
+    assert payload["graph_read_request_count"] == 1
+    assert payload["graph_write_request_count"] == 1
+    assert calls["silent_auth"] is True
+    assert calls["execute_args"] == (action_id, "key-one", "secret-token")
+
+
+def test_actions_execute_disabled_write_config_stops_before_authentication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ForbiddenProvider:
+        @classmethod
+        def from_settings(cls, *args: object, **kwargs: object) -> None:
+            raise AssertionError("disabled write configuration must stop before authentication")
+
+    monkeypatch.setattr("inbox_agent.cli.GraphTokenProvider", ForbiddenProvider)
+    action_id = "action-disabled"
+    result = runner.invoke(
+        app,
+        [
+            "actions",
+            "execute",
+            action_id,
+            "--idempotency-key",
+            "key-disabled",
+            "--confirm-action",
+            action_id,
+            "--graph-config",
+            str(write_graph_write_config(tmp_path, enabled=False)),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "write_enabled: true" in result.stderr
+
+
+def test_actions_execute_non_success_has_distinct_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, *args: object, **kwargs: object) -> FakeProvider:
+            return cls()
+
+        def acquire_silent(self) -> GraphAccessToken:
+            return GraphAccessToken("secret-token")
+
+    class FakeGraphClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    class FakeExecutor:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def execute(
+            self,
+            action_id: str,
+            idempotency_key: str,
+            token: GraphAccessToken,
+        ) -> ActionGraphExecutionReport:
+            return ActionGraphExecutionReport(
+                action_id=action_id,
+                outcome=ActionGraphExecutionOutcome.CONFLICT,
+                final_status=MailboxActionStatus.FAILED,
+                attempt_number=1,
+                graph_read_request_count=1,
+                graph_write_request_count=0,
+                reason="approved snapshot is stale",
+            )
+
+    monkeypatch.setattr("inbox_agent.cli.GraphTokenProvider", FakeProvider)
+    monkeypatch.setattr("inbox_agent.cli.GraphCategoryWriteClient", FakeGraphClient)
+    monkeypatch.setattr("inbox_agent.cli.ApprovedActionGraphExecutor", FakeExecutor)
+    action_id = "action-conflict"
+    result = runner.invoke(
+        app,
+        [
+            "actions",
+            "execute",
+            action_id,
+            "--idempotency-key",
+            "key-conflict",
+            "--confirm-action",
+            action_id,
+            "--graph-config",
+            str(write_graph_write_config(tmp_path, enabled=True)),
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.stdout)["outcome"] == "conflict"
+
+
+def test_actions_reconcile_is_single_action_read_only_workflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, *args: object, **kwargs: object) -> FakeProvider:
+            return cls()
+
+        def acquire_silent(self) -> GraphAccessToken:
+            calls["silent_auth"] = True
+            return GraphAccessToken("secret-token")
+
+    class FakeGraphClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    class FakeReconciler:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def reconcile(
+            self,
+            action_id: str,
+            idempotency_key: str,
+            token: GraphAccessToken,
+        ) -> ActionReconciliationReport:
+            calls["reconcile_args"] = (action_id, idempotency_key, token.access_token)
+            return ActionReconciliationReport(
+                action_id=action_id,
+                outcome=ActionReconciliationOutcome.APPLIED,
+                final_status=MailboxActionStatus.SUCCEEDED,
+                reason="live categories match the approved target",
+            )
+
+    monkeypatch.setattr("inbox_agent.cli.GraphTokenProvider", FakeProvider)
+    monkeypatch.setattr("inbox_agent.cli.GraphCategoryWriteClient", FakeGraphClient)
+    monkeypatch.setattr("inbox_agent.cli.UncertainActionReconciler", FakeReconciler)
+    result = runner.invoke(
+        app,
+        [
+            "actions",
+            "reconcile",
+            "action-uncertain",
+            "--idempotency-key",
+            "key-uncertain",
+            "--graph-config",
+            str(write_graph_write_config(tmp_path, enabled=True)),
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["outcome"] == "applied"
+    assert payload["graph_read_request_count"] == 1
+    assert payload["graph_write_request_count"] == 0
+    assert calls["silent_auth"] is True
+    assert calls["reconcile_args"] == (
+        "action-uncertain",
+        "key-uncertain",
+        "secret-token",
+    )
+
+
+def test_actions_reconcile_unresolved_result_has_distinct_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProvider:
+        @classmethod
+        def from_settings(cls, *args: object, **kwargs: object) -> FakeProvider:
+            return cls()
+
+        def acquire_silent(self) -> GraphAccessToken:
+            return GraphAccessToken("secret-token")
+
+    class FakeGraphClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    class FakeReconciler:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def reconcile(
+            self,
+            action_id: str,
+            idempotency_key: str,
+            token: GraphAccessToken,
+        ) -> ActionReconciliationReport:
+            return ActionReconciliationReport(
+                action_id=action_id,
+                outcome=ActionReconciliationOutcome.READ_FAILED,
+                final_status=MailboxActionStatus.OUTCOME_UNKNOWN,
+                reason="Graph read failed",
+            )
+
+    monkeypatch.setattr("inbox_agent.cli.GraphTokenProvider", FakeProvider)
+    monkeypatch.setattr("inbox_agent.cli.GraphCategoryWriteClient", FakeGraphClient)
+    monkeypatch.setattr("inbox_agent.cli.UncertainActionReconciler", FakeReconciler)
+    result = runner.invoke(
+        app,
+        [
+            "actions",
+            "reconcile",
+            "action-uncertain",
+            "--idempotency-key",
+            "key-uncertain",
+            "--graph-config",
+            str(write_graph_write_config(tmp_path, enabled=True)),
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.stdout)["outcome"] == "read_failed"
