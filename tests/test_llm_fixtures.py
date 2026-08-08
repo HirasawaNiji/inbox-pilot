@@ -21,7 +21,7 @@ def test_load_fake_llm_responses_reads_strict_versioned_fixture() -> None:
     responses = load_fake_llm_responses(RESPONSES_PATH)
 
     assert responses.dataset_version == "llm-eval-v1"
-    assert responses.prompt_version == "triage-v1"
+    assert responses.prompt_version == "triage-v4"
     assert len(responses.responses) == 8
     assert responses.responses[0].analysis.priority is Priority.P1
     assert set(responses.as_mapping()) == {response.source_id for response in responses.responses}

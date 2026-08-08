@@ -6,10 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 from inbox_agent.cli import app
 from inbox_agent.graph import GraphAccessToken, GraphSyncReport
+from inbox_agent.llm import FakeLLMProvider, OpenAICompatibleProvider
+from inbox_agent.models import LLMMessageAnalysis, MessageCategory, Priority
 
 ROOT = Path(__file__).resolve().parents[1]
 DATASET_PATH = ROOT / "data" / "samples" / "sample_emails.json"
@@ -32,8 +35,8 @@ def test_demo_runs_bundled_dataset() -> None:
 
     assert result.exit_code == 0
     assert "InboxPilot Analysis" in result.stdout
-    assert "成功 20" in result.stdout
-    assert "待复核 3" in result.stdout
+    assert "成功 50" in result.stdout
+    assert "待复核 7" in result.stdout
     assert "sample-" not in result.stdout
 
 
@@ -43,7 +46,7 @@ def test_demo_json_is_machine_readable() -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["policy_version"] == "rules-v1"
-    assert len(payload["results"]) == 20
+    assert len(payload["results"]) == 50
     assert payload["failures"] == []
 
 
@@ -62,7 +65,7 @@ def test_analyze_accepts_explicit_dataset_and_policy() -> None:
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert len(payload["results"]) == 20
+    assert len(payload["results"]) == 50
 
 
 def test_show_reasons_displays_score_contributions() -> None:
@@ -249,6 +252,59 @@ def test_evaluate_reports_missing_labels(tmp_path: Path) -> None:
     assert "does not exist" in result.stderr
 
 
+def test_validate_llm_requires_local_provider_config(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["validate-llm", "--llm-config", str(tmp_path / "missing.local.yaml")],
+    )
+
+    assert result.exit_code == 1
+    assert "does not exist" in result.stderr
+
+
+def test_validate_llm_limit_runs_one_message_without_missing_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_payload = json.loads(
+        (ROOT / "data" / "eval" / "expected_results.json").read_text(encoding="utf-8")
+    )
+    label = expected_payload["labels"][0]
+    provider = FakeLLMProvider(
+        {
+            label["source_id"]: LLMMessageAnalysis(
+                priority=Priority(label["expected_priority"]),
+                category=MessageCategory(label["expected_category"]),
+                summary="Synthetic smoke-test summary.",
+                action_items=(),
+                deadline=None,
+                confidence=0.9,
+                rationale="Synthetic smoke-test rationale.",
+                requires_review=label["requires_review"],
+            )
+        }
+    )
+    monkeypatch.setattr(
+        OpenAICompatibleProvider,
+        "from_yaml",
+        classmethod(lambda cls, path: provider),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "validate-llm",
+            "--llm-config",
+            "unused.local.yaml",
+            "--limit",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "1/1" in result.stdout
+    assert "未生成结构化分析" not in result.stdout
+
+
 def test_no_command_displays_help() -> None:
     result = runner.invoke(app, [])
 
@@ -257,3 +313,4 @@ def test_no_command_displays_help() -> None:
     assert "demo" in result.stdout
     assert "analyze" in result.stdout
     assert "evaluate" in result.stdout
+    assert "validate-llm" in result.stdout

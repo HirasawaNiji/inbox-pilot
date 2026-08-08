@@ -283,6 +283,7 @@ class OfflinePipeline:
         dataset: MessageDataset,
         *,
         evaluated_at: datetime | None = None,
+        stop_on_llm_failure: bool = False,
     ) -> AnalysisReport:
         """Analyze all messages, keeping successful results when one fails."""
 
@@ -293,6 +294,7 @@ class OfflinePipeline:
         llm_failures: list[AnalysisFailure] = []
         llm_routing_decisions: dict[str, LLMRoutingDecision] = {}
         llm_fusion_decisions: dict[str, LLMFusionDecision] = {}
+        llm_stopped = False
 
         for message in dataset.messages:
             try:
@@ -302,13 +304,15 @@ class OfflinePipeline:
                 continue
             successful.append((normalized.received_at, result))
 
-            if self.llm_provider is not None:
+            if self.llm_provider is not None and not llm_stopped:
                 assert self.llm_router is not None
                 try:
                     features = self.engine.extract_features(normalized)
                     routing_decision = self.llm_router.decide(result, features)
                 except Exception as error:  # noqa: BLE001 - sidecar isolation is intentional
                     llm_failures.append(_failure_record(normalized.source_id, "llm_routing", error))
+                    if stop_on_llm_failure:
+                        llm_stopped = True
                     continue
                 llm_routing_decisions[normalized.source_id] = routing_decision
                 if not routing_decision.should_analyze:
@@ -326,6 +330,8 @@ class OfflinePipeline:
                     llm_failures.append(
                         _failure_record(normalized.source_id, "llm_analysis", error)
                     )
+                    if stop_on_llm_failure:
+                        llm_stopped = True
                 else:
                     llm_analyses[normalized.source_id] = llm_result
                     assert self.llm_fusion is not None
@@ -338,6 +344,8 @@ class OfflinePipeline:
                         llm_failures.append(
                             _failure_record(normalized.source_id, "llm_fusion", error)
                         )
+                        if stop_on_llm_failure:
+                            llm_stopped = True
                     else:
                         successful[-1] = (normalized.received_at, fused_result)
                         llm_fusion_decisions[normalized.source_id] = fusion_decision

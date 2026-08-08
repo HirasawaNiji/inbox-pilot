@@ -40,7 +40,14 @@ class LLMProviderContractError(LLMProviderError):
         validation_error: ValidationError,
     ) -> None:
         self.validation_error = validation_error
-        super().__init__(provider_name, message_id, "response failed schema validation")
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
+            for item in validation_error.errors(include_url=False)[:5]
+        )
+        message = "response failed schema validation"
+        if details:
+            message = f"{message} ({details})"
+        super().__init__(provider_name, message_id, message)
 
 
 class LLMProviderResultMismatchError(LLMProviderError):

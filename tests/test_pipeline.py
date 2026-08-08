@@ -73,9 +73,9 @@ def first_messages(count: int = 2) -> MessageDataset:
 def test_pipeline_analyzes_complete_sample_dataset() -> None:
     report = analyze_file(DATASET_PATH, POLICY_PATH, evaluated_at=EVALUATED_AT)
 
-    assert report.processed_count == 20
+    assert report.processed_count == 50
     assert report.failure_count == 0
-    assert report.review_count == 3
+    assert report.review_count == 7
     assert report.schema_version == "1.0"
     assert report.policy_version == "rules-v1"
     assert report.evaluated_at == EVALUATED_AT
@@ -143,7 +143,7 @@ def test_pipeline_isolates_one_message_failure() -> None:
 
     report = pipeline.analyze_dataset(dataset, evaluated_at=EVALUATED_AT)
 
-    assert report.processed_count == 19
+    assert report.processed_count == 49
     assert report.failure_count == 1
     assert report.failures[0].message_id == "sample-010-tuition-payment"
     assert report.failures[0].stage == "message_analysis"
@@ -215,7 +215,7 @@ def test_pipeline_selective_router_calls_provider_only_for_uncertain_messages() 
         if not decision.should_analyze
     }
 
-    assert report.processed_count == 20
+    assert report.processed_count == 50
     assert report.failure_count == 0
     assert report.llm_routed_count == len(provider.calls)
     assert report.llm_analysis_count == report.llm_routed_count
@@ -353,12 +353,33 @@ def test_pipeline_isolates_missing_llm_response_from_rule_results() -> None:
     assert report.llm_failures[0].error_type == "LLMResponseNotConfiguredError"
 
 
+def test_pipeline_can_stop_paid_llm_calls_after_first_failure() -> None:
+    dataset = first_messages(2)
+    pipeline = OfflinePipeline.from_yaml(
+        POLICY_PATH,
+        llm_provider=FakeLLMProvider({}),
+        llm_router=LLMRouter.analyze_all(),
+    )
+
+    report = pipeline.analyze_dataset(
+        dataset,
+        evaluated_at=EVALUATED_AT,
+        stop_on_llm_failure=True,
+    )
+
+    assert report.processed_count == 2
+    assert report.llm_routed_count == 1
+    assert report.llm_analysis_count == 0
+    assert report.llm_failure_count == 1
+    assert report.llm_failures[0].message_id == dataset.messages[0].source_id
+
+
 class MismatchedLLMProvider:
     """Provider double that violates message identity while returning valid JSON."""
 
     provider_name = "mismatched_fake"
     model_name = "fake-structured-v1"
-    prompt_version = "triage-v1"
+    prompt_version = "triage-v4"
 
     def analyze(self, message: NormalizedMessage) -> LLMAnalysisResult:
         return LLMAnalysisResult(

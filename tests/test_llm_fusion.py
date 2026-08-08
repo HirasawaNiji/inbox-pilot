@@ -98,7 +98,7 @@ def make_llm_result(
         analysis=analysis,
         provider="fake",
         model_name="fake-structured-v1",
-        prompt_version="triage-v1",
+        prompt_version="triage-v4",
         analyzed_at=EVALUATED_AT,
         duration_ms=1,
     )

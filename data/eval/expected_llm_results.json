@@ -1,7 +1,7 @@
 {
   "dataset_version": "llm-eval-v1",
   "source_dataset": "../samples/llm_evaluation_emails.json",
-  "prompt_version": "triage-v1",
+  "prompt_version": "triage-v4",
   "labels": [
     {
       "source_id": "llm-eval-001-relative-deadline",

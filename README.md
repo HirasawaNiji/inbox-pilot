@@ -4,7 +4,7 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 学生邮箱场景的可解�
 
 ## 项目状态
 
-**阶段一：离线 MVP 已完成并通过验收。阶段二：智能分析和 Microsoft Graph 只读同步已完成，并通过个人 Outlook 真实环境验收。**
+**阶段一、阶段二和阶段 2.5 已完成。下一步进入阶段三前半：人工确认、dry-run、审计、幂等与回滚。**
 
 默认流程仍完全离线；用户显式创建本地 Graph 配置并完成授权后，可以只读同步个人 Outlook 收件箱。当前没有写回、移动、删除或发送邮件的能力。另在显式提供本地 LLM 配置和环境变量 API Key 后，可选择调用 OpenAI 或 DeepSeek 分析邮件。
 
@@ -14,7 +14,7 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 学生邮箱场景的可解�
 - P1～P5 优先级、0～100 分、稳定类别、摘要、截止时间和人工复核标记；
 - 每次分数变化均包含原因代码、说明、变化值和匹配内容；
 - `demo`、`analyze`、`evaluate` 三个 CLI 命令，支持表格和 JSON 输出；
-- 当前 225 项自动化测试全部通过，总覆盖率 93.24%，最低门槛为 80%；
+- 当前 233 项自动化测试全部通过，总覆盖率 92.17%，最低门槛为 80%；
 - pytest、Ruff、格式检查、mypy 和全新隔离环境安装验证全部通过。
 
 详细证据见[阶段一验收报告](docs/stage1_acceptance.md)。
@@ -40,10 +40,20 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 学生邮箱场景的可解�
 - [x] 保守融合规则与 LLM 判断，阻止静默降级，并对优先级、截止时间和置信度冲突强制复核；
 - [x] 实现 Microsoft Graph 委托登录、OS 加密令牌缓存和只读 Delta 增量同步；
 - [x] 将 Graph 邮件严格转换为现有数据模型，不下载附件，并把真实数据隔离在 `data/private/`；
-- [x] 使用个人 Outlook Client ID 完成设备码登录、首次同步、增量同步和 Pipeline 分析验收；
-- [ ] 在明确授权后加入 Outlook 分类写回。
+- [x] 使用个人 Outlook Client ID 完成设备码登录、首次同步、增量同步和 Pipeline 分析验收。
 
 Microsoft Graph 真实环境验收已于 2026-08-08 完成。其他开发者可按照[个人 Outlook 只读同步指南](docs/microsoft_graph_sync.md)连接自己的邮箱。
+
+### 阶段 2.5 进度
+
+- [x] 将主 demo 从 20 封扩充到 50 封公开虚构邮件；
+- [x] 将独立人工标签扩充到 50 条，并在 `2.1` 中加入 LLM 期望覆盖与显式优先级容差；
+- [x] 新增全量真实 Provider 验证命令，统计准确率、失败、Token 和耗时；
+- [x] DeepSeek V4 分类请求使用 JSON Output、本地严格 Schema，并关闭 thinking 模式；
+- [x] 使用本地 API Key 完成首次 50 封 DeepSeek 真实验证并记录 `triage-v3` 基线；
+- [x] 使用显式优先级容差重新验证 `triage-v4`；本地验收在允许范围内达到 80%，阶段 2.5 基本通过。
+
+阶段 2.5 的配置、安全边界、验收门槛、运行命令和真实验证记录见[阶段 2.5 DeepSeek 真实验证指南](docs/stage2_5_deepseek_validation.md)。OpenAI / DeepSeek 的配置、密钥保护与故障排查见[真实 LLM Provider 接入指南](docs/llm_provider.md)。Outlook 分类写回已移动到阶段三后半部分；只有人工确认、dry-run、审计、幂等和回滚机制先通过验收后，才会考虑提升邮箱权限。
 
 ## 快速开始
 
@@ -74,7 +84,7 @@ uv run inbox-agent --help
 
 ### `demo`：运行内置样例
 
-分析仓库中的 20 封匿名邮件：
+分析仓库中的 50 封匿名邮件：
 
 ```powershell
 uv run inbox-agent demo
@@ -110,12 +120,27 @@ uv run inbox-agent analyze data/samples/sample_emails.json `
 
 ```powershell
 Copy-Item config/llm_provider.example.yaml config/llm_provider.local.yaml
-$env:OPENAI_API_KEY = Read-Host "OpenAI API Key" -MaskInput
+$env:OPENAI_API_KEY = Read-Host -Prompt "请输入 OpenAI API Key" -MaskInput
 uv run inbox-agent analyze data/samples/sample_emails.json `
   --llm-config config/llm_provider.local.yaml
 ```
 
-DeepSeek 只需修改本地 YAML 中的 `provider`、`model`、`base_url` 和 `api_key_env`。完整字段说明和安全操作见[OpenAI / DeepSeek Provider 配置指南](docs/llm_provider.md)。
+DeepSeek 只需修改本地 YAML 中的 `provider`、`model`、`base_url` 和 `api_key_env`。完整接入步骤、两类运行模式、验收指标、密钥保护和故障排查见[OpenAI / DeepSeek Provider 配置指南](docs/llm_provider.md)。
+
+先对 1 封公开样例执行低成本冒烟测试，再运行全部 50 封：
+
+```powershell
+Copy-Item config/deepseek_validation.example.yaml config/deepseek_validation.local.yaml
+$env:DEEPSEEK_API_KEY = Read-Host -Prompt "请输入 DeepSeek API Key" -MaskInput
+uv run inbox-agent validate-llm `
+  --llm-config config/deepseek_validation.local.yaml `
+  --limit 1
+
+uv run inbox-agent validate-llm `
+  --llm-config config/deepseek_validation.local.yaml
+```
+
+DeepSeek 会收到完整响应 Schema，返回结果仍由 Pydantic 在本地严格复验。命令会产生 API 调用和费用；任一 Provider、Schema 或融合错误会停止后续 LLM 请求并显示具体错误。首次运行前请阅读[阶段 2.5 DeepSeek 真实验证指南](docs/stage2_5_deepseek_validation.md)。
 
 ### `evaluate`：执行离线回归评测
 
@@ -152,8 +177,8 @@ uv run inbox-agent analyze data/private/outlook_inbox.json
 | --- | --- |
 | `0` | 命令成功 |
 | `1` | 数据集、人工标签、YAML 配置或 API Key 环境变量无法加载或校验失败 |
-| `2` | 分析完成，但至少一封规则或 LLM 分析失败 |
-| `3` | 评测完成，但预测与人工标签不一致 |
+| `2` | 分析或真实模型验证完成，但至少一封规则或 LLM 分析失败 |
+| `3` | 离线评测不一致，或真实模型验证指标未达到门槛 |
 
 ## 阶段一实现范围
 
@@ -208,7 +233,7 @@ uv run inbox-agent analyze data/private/outlook_inbox.json
 
 ### 分类 Prompt
 
-- `triage-v1` 固定 P1～P5 标准、稳定类别、截止时间和人工复核语义；
+- `triage-v4` 固定 P1～P5 标准、稳定类别、截止时间和人工复核语义，细化严重后果、类别边界和复核触发，并向 JSON 模式 Provider 提供完整响应 Schema；
 - 系统指令与邮件 JSON 分离，邮件内容始终按不可信数据处理；
 - 默认最多发送 12,000 个正文字符，并明确记录是否截断；
 - `MessageCategory` 将分类限制在已知枚举内；
@@ -273,7 +298,7 @@ uv run inbox-agent analyze data/private/outlook_inbox.json
 
 ### 阶段二 LLM 语义评测
 
-- 新增 8 封独立匿名邮件，不修改阶段一的 20 封规则回归数据；
+- 保留 8 封独立语义边界邮件，与阶段 2.5 的 50 封主 demo 分开评测；
 - 覆盖相对日期、多任务、无任务、Prompt Injection、模糊/冲突日期、转发旧截止时间和英文通知；
 - 人工标签与 Fake Provider 响应分开保存，避免把预设响应直接当成评测标准；
 - 分别计算优先级、类别、摘要事实、行动项、截止时间和人工复核准确率；
@@ -324,29 +349,31 @@ inbox-pilot/
 │   ├── llm_routing.yaml                  # LLM 置信度与冲突路由
 │   ├── llm_fusion.yaml                   # 规则与 LLM 安全融合
 │   ├── llm_provider.example.yaml         # OpenAI / DeepSeek 公开配置模板
+│   ├── deepseek_validation.example.yaml  # 50 封真实模型验证模板
 │   └── graph.example.yaml                # 个人 Outlook 只读同步配置模板
 ├── data/
 │   ├── samples/
-│   │   ├── sample_emails.json            # 阶段一 20 封规则回归邮件
+│   │   ├── sample_emails.json            # 阶段 2.5 的 50 封主 demo
 │   │   └── llm_evaluation_emails.json    # 阶段二 8 封语义边界邮件
 │   └── eval/
-│       ├── expected_results.json         # 阶段一人工期望结果
+│       ├── expected_results.json         # 阶段 2.5 的 50 条人工标签
 │       ├── expected_llm_results.json     # 阶段二人工语义标签
 │       └── fake_llm_responses.json       # 严格离线结构化预测
 ├── docs/
-│   ├── classification_prompt.md          # triage-v1 Prompt 设计
+│   ├── classification_prompt.md          # triage-v4 Prompt 设计
 │   ├── llm_evaluation.md                 # 阶段二语义评测指南
 │   ├── llm_fusion.md                     # 规则与 LLM 受控融合指南
 │   ├── llm_provider.md                   # 真实 Provider 配置与安全指南
 │   ├── llm_routing.md                    # LLM 调用路由配置指南
 │   ├── microsoft_graph_sync.md            # 个人 Outlook 应用注册与同步指南
 │   ├── rules_configuration.md            # YAML 规则修改指南
+│   ├── stage2_5_deepseek_validation.md    # 50 封 DeepSeek 真实验证指南
 │   └── stage1_acceptance.md              # 阶段一验收报告
 ├── src/inbox_agent/
-│   ├── cli.py                     # demo、analyze、evaluate、outlook
+│   ├── cli.py                     # demo、analyze、evaluate、validate-llm、outlook
 │   ├── evaluation.py              # 离线指标与不一致明细
 │   ├── graph/                      # MSAL 登录、Graph GET、映射与 Delta 同步
-│   ├── llm/                        # Provider、离线 Fake 与分类 Prompt
+│   ├── llm/                        # Provider、Prompt、路由、融合与真实验证指标
 │   ├── loader.py                  # JSON 读取与校验
 │   ├── models.py                  # Pydantic 数据模型
 │   ├── normalizer.py              # HTML 与字段标准化
@@ -422,6 +449,7 @@ uv run mypy src
 
 - Microsoft Graph 已通过个人 Outlook 验收，但尚未验证组织租户策略、共享邮箱和其他邮件文件夹；
 - 已接入 OpenAI / DeepSeek API，但尚未使用真实邮箱数据进行泛化评测；
+- 50 封 DeepSeek `triage-v3` 精确基线已记录；`triage-v4` 本地复测按显式容差口径达到 80% 并基本通过，但仍需更多真实场景检验泛化能力；
 - 当前规则和评测数据主要面向中文高校邮件场景；
 - 离线回归指标不能代表真实邮箱中的泛化表现。
 
@@ -430,8 +458,12 @@ uv run mypy src
 1. [x] 接入真实结构化 LLM Provider，并保留独立语义数据集评测；
 2. [x] 实现 Microsoft Graph 委托登录和只读增量同步；
 3. [x] 使用个人 Outlook 账号完成 Graph 真实环境验收；
-4. [ ] 加入人工确认，并在明确授权后写回 Outlook 分类；
-5. [ ] 增加成本统计、Web 演示界面和 GitHub Actions 持续集成。
+4. [x] 将主 demo 扩展到 50 封，并实现 DeepSeek 全量验证与 Token 统计；
+5. [x] 完成首次 DeepSeek 真实运行并记录 `triage-v3` 基线；
+6. [x] 复测 `triage-v4`，按显式容差口径完成阶段 2.5 基本验收；
+7. [ ] 阶段三前半：实现人工确认、dry-run、审计、幂等和回滚机制；
+8. [ ] 阶段三后半：在明确授权后申请写权限并写回 Outlook 分类；
+9. [ ] 增加 Web 演示界面和 GitHub Actions 持续集成。
 
 ## License
 

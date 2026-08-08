@@ -67,6 +67,13 @@ from inbox_agent.llm.routing import (
     LLMRoutingReasonCode,
     load_llm_routing_policy,
 )
+from inbox_agent.llm.validation import (
+    LLMValidationFailure,
+    LLMValidationMismatch,
+    LLMValidationReport,
+    LLMValidationTolerance,
+    validate_llm_classifications,
+)
 
 __all__ = [
     "FakeLLMProvider",
@@ -119,9 +126,14 @@ __all__ = [
     "LLMRoutingPolicyYAMLError",
     "LLMRoutingReason",
     "LLMRoutingReasonCode",
+    "LLMValidationMismatch",
+    "LLMValidationFailure",
+    "LLMValidationReport",
+    "LLMValidationTolerance",
     "build_classification_prompt",
     "load_fake_llm_responses",
     "load_llm_fusion_policy",
     "load_llm_routing_policy",
     "load_openai_compatible_settings",
+    "validate_llm_classifications",
 ]

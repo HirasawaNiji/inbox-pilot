@@ -337,7 +337,7 @@ def test_llm_analysis_result_requires_traceable_metadata() -> None:
         analysis=make_llm_analysis(),
         provider="openai",
         model_name="gpt-5-mini",
-        prompt_version="triage-v1",
+        prompt_version="triage-v4",
         analyzed_at=datetime(2026, 8, 7, 14, 30, tzinfo=UTC),
         duration_ms=850,
         usage=LLMTokenUsage(input_tokens=900, output_tokens=180),
@@ -360,7 +360,7 @@ def test_llm_analysis_result_rejects_naive_timestamp() -> None:
             analysis=make_llm_analysis(),
             provider="openai",
             model_name="gpt-5-mini",
-            prompt_version="triage-v1",
+            prompt_version="triage-v4",
             analyzed_at=datetime(2026, 8, 7, 14, 30),
             duration_ms=500,
         )

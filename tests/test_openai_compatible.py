@@ -239,9 +239,13 @@ def test_deepseek_uses_json_mode_and_validates_locally() -> None:
     assert result.usage is not None
     assert result.usage.cached_input_tokens == 80
     assert requests[0]["response_format"] == {"type": "json_object"}
+    assert requests[0]["thinking"] == {"type": "disabled"}
     assert "store" not in requests[0]
     assert "safety_identifier" not in requests[0]
     assert "JSON" in requests[0]["messages"][0]["content"]
+    assert '"$defs"' in requests[0]["messages"][0]["content"]
+    assert '"action_items"' in requests[0]["messages"][0]["content"]
+    assert '"requires_review"' in requests[0]["messages"][0]["content"]
 
 
 def test_deepseek_rejects_invalid_and_empty_json() -> None:
@@ -254,6 +258,7 @@ def test_deepseek_rejects_invalid_and_empty_json() -> None:
     with pytest.raises(LLMProviderContractError) as captured:
         invalid.analyze(make_message())
     assert isinstance(captured.value.validation_error, ValidationError)
+    assert "category: Field required" in str(captured.value)
 
     empty = mock_provider(
         OpenAICompatibleService.DEEPSEEK,

@@ -602,7 +602,7 @@ bulk_mail: "-10"
 uv run pytest
 ```
 
-其中以下测试会比较 20 封样例邮件和人工标签：
+其中以下测试会比较当前 50 封主 demo 和人工标签：
 
 ```text
 test_all_sample_priorities_match_human_labels

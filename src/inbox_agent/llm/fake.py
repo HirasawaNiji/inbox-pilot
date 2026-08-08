@@ -36,7 +36,7 @@ class FakeLLMProvider:
         failures: Mapping[str, str] | None = None,
         provider_name: str = "fake",
         model_name: str = "fake-structured-v1",
-        prompt_version: str = "triage-v1",
+        prompt_version: str = "triage-v4",
         clock: Callable[[], datetime] = _utc_now,
         duration_ms: int = 0,
         usage: LLMTokenUsage | None = None,
