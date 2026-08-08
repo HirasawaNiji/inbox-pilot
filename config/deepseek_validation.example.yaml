@@ -1,0 +1,12 @@
+# Copy to config/deepseek_validation.local.yaml before a real validation run.
+# The API key is read only from the environment variable below.
+provider: deepseek
+model: deepseek-v4-flash
+base_url: https://api.deepseek.com
+api_key_env: DEEPSEEK_API_KEY
+
+analysis_timezone: Asia/Shanghai
+max_body_characters: 12000
+max_completion_tokens: 2000
+timeout_seconds: 60
+max_retries: 2

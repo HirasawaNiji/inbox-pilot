@@ -32,12 +32,15 @@ from inbox_agent.graph import (
 from inbox_agent.llm import (
     LLMFusionPolicyError,
     LLMProviderConfigurationError,
+    LLMRouter,
     LLMRoutingPolicyError,
+    LLMValidationReport,
     OpenAICompatibleProvider,
+    validate_llm_classifications,
 )
-from inbox_agent.loader import DatasetLoadError
+from inbox_agent.loader import DatasetLoadError, load_dataset
 from inbox_agent.models import TriageResult
-from inbox_agent.pipeline import AnalysisReport, analyze_file
+from inbox_agent.pipeline import AnalysisReport, OfflinePipeline, analyze_file
 from inbox_agent.rule_engine import RulePolicyError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -250,6 +253,79 @@ def _render_graph_sync_table(report: GraphSyncReport) -> None:
         _console().print(failure_table)
 
 
+def _render_llm_validation_table(report: LLMValidationReport) -> None:
+    """Render real-provider classification quality and usage without email bodies."""
+
+    table = Table(title="InboxPilot Real LLM Validation")
+    table.add_column("指标")
+    table.add_column("结果", justify="right")
+    table.add_row("Provider", report.provider or "-")
+    table.add_row("模型", report.model_name or "-")
+    table.add_row("Prompt", report.prompt_version or "-")
+    table.add_row("成功分析", f"{report.analyzed_count}/{report.total_labels}")
+    table.add_row("Provider 失败", str(report.provider_failure_count))
+    table.add_row("优先级精确率", f"{report.priority_accuracy:.2%}")
+    table.add_row("优先级容差率", f"{report.tolerated_priority_accuracy:.2%}")
+    table.add_row("类别准确率", f"{report.category_accuracy:.2%}")
+    table.add_row("复核准确率", f"{report.review_accuracy:.2%}")
+    table.add_row("完全精确率", f"{report.exact_match_accuracy:.2%}")
+    table.add_row("完全容差率", f"{report.tolerated_exact_match_accuracy:.2%}")
+    table.add_row("输入 Token", str(report.input_tokens))
+    table.add_row("输出 Token", str(report.output_tokens))
+    table.add_row("缓存命中 Token", str(report.cached_input_tokens))
+    table.add_row("累计耗时", f"{report.total_duration_ms / 1000:.2f}s")
+    table.add_row("验收结果", "PASS" if report.passed else "FAIL")
+    _console().print(table)
+
+    if report.failures:
+        failure_table = Table(title="Real LLM Failures")
+        failure_table.add_column("Message ID")
+        failure_table.add_column("Stage")
+        failure_table.add_column("Error")
+        for failure in report.failures:
+            failure_table.add_row(
+                failure.message_id,
+                failure.stage,
+                f"{failure.error_type}: {failure.error_message}",
+            )
+        _console().print(failure_table)
+
+    missing_count = sum(mismatch.field == "missing_analysis" for mismatch in report.mismatches)
+    visible_mismatches = tuple(
+        mismatch for mismatch in report.mismatches if mismatch.field != "missing_analysis"
+    )
+    if missing_count:
+        _console().print(f"未生成结构化分析：[bold]{missing_count}[/bold] 封")
+
+    if report.tolerances:
+        tolerance_table = Table(title="Accepted Priority Variances")
+        tolerance_table.add_column("Message ID")
+        tolerance_table.add_column("标准优先级")
+        tolerance_table.add_column("接受结果")
+        for tolerance in report.tolerances:
+            tolerance_table.add_row(
+                tolerance.message_id,
+                tolerance.expected,
+                tolerance.actual,
+            )
+        _console().print(tolerance_table)
+
+    if visible_mismatches:
+        mismatch_table = Table(title="Real LLM Mismatches")
+        mismatch_table.add_column("Message ID")
+        mismatch_table.add_column("字段")
+        mismatch_table.add_column("期望")
+        mismatch_table.add_column("实际")
+        for mismatch in visible_mismatches:
+            mismatch_table.add_row(
+                mismatch.message_id,
+                mismatch.field,
+                mismatch.expected,
+                mismatch.actual or "-",
+            )
+        _console().print(mismatch_table)
+
+
 def _run(
     dataset_path: Path,
     policy_path: Path,
@@ -433,6 +509,100 @@ def outlook_sync(
 
     if not report.completed:
         raise typer.Exit(code=2)
+
+
+@app.command("validate-llm")
+def validate_llm(
+    llm_config_path: Annotated[
+        Path,
+        typer.Option("--llm-config", help="Path to a local OpenAI/DeepSeek provider YAML file."),
+    ],
+    dataset_path: Annotated[
+        Path,
+        typer.Option("--dataset", "-d", help="Path to the public validation dataset."),
+    ] = DEFAULT_DATASET_PATH,
+    expected_path: Annotated[
+        Path,
+        typer.Option("--labels", "-l", help="Path to independent classification labels."),
+    ] = DEFAULT_EXPECTED_PATH,
+    policy_path: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Path to the deterministic rule policy."),
+    ] = DEFAULT_POLICY_PATH,
+    llm_fusion_path: Annotated[
+        Path,
+        typer.Option("--llm-fusion-config", help="Path to the LLM fusion YAML policy."),
+    ] = DEFAULT_LLM_FUSION_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            min=1,
+            help="Analyze at most this many messages for a low-cost smoke test.",
+        ),
+    ] = None,
+) -> None:
+    """Call a real provider for every public sample and report classification metrics."""
+
+    try:
+        dataset = load_dataset(dataset_path)
+        expected = load_expected_results(expected_path)
+        if limit is not None:
+            dataset = dataset.model_copy(update={"messages": dataset.messages[:limit]})
+
+        labels_by_id = {label.source_id: label for label in expected.labels}
+        selected_ids = tuple(message.source_id for message in dataset.messages)
+        missing_label_ids = tuple(
+            message_id for message_id in selected_ids if message_id not in labels_by_id
+        )
+        if missing_label_ids:
+            joined_ids = ", ".join(missing_label_ids[:5])
+            raise ExpectedResultsLoadError(
+                expected_path,
+                f"Expected results have no labels for selected messages: {joined_ids}",
+            )
+        expected = expected.model_copy(
+            update={"labels": tuple(labels_by_id[message_id] for message_id in selected_ids)}
+        )
+
+        provider = OpenAICompatibleProvider.from_yaml(llm_config_path)
+        pipeline = OfflinePipeline.from_yaml(
+            policy_path,
+            llm_provider=provider,
+            llm_router=LLMRouter.analyze_all(),
+            llm_fusion_path=llm_fusion_path,
+        )
+        analysis = pipeline.analyze_dataset(dataset, stop_on_llm_failure=True)
+        report = validate_llm_classifications(
+            analysis,
+            expected,
+            provider_name=provider.provider_name,
+            model_name=provider.model_name,
+            prompt_version=provider.prompt_version,
+        )
+    except (
+        DatasetLoadError,
+        ExpectedResultsLoadError,
+        RulePolicyError,
+        LLMProviderConfigurationError,
+        LLMFusionPolicyError,
+    ) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
+    else:
+        _render_llm_validation_table(report)
+
+    if report.provider_failure_count:
+        raise typer.Exit(code=2)
+    if not report.passed:
+        raise typer.Exit(code=3)
 
 
 @app.command()

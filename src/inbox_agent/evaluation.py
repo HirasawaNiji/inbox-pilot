@@ -21,6 +21,35 @@ class ExpectedLabel(FrozenModel):
     expected_signals: tuple[str, ...] = ()
     requires_review: bool = False
     explanation: str = Field(min_length=1, max_length=1_000)
+    llm_expected_priority: Priority | None = None
+    llm_acceptable_priorities: tuple[Priority, ...] = ()
+    llm_expected_category: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]*$",
+        max_length=100,
+    )
+
+    @model_validator(mode="after")
+    def validate_llm_priority_policy(self) -> Self:
+        """Keep model-specific alternatives explicit, unique, and non-canonical."""
+
+        if len(self.llm_acceptable_priorities) != len(set(self.llm_acceptable_priorities)):
+            raise ValueError("LLM acceptable priorities contain duplicates")
+        if self.validation_priority in self.llm_acceptable_priorities:
+            raise ValueError("LLM expected priority must not also be an acceptable alternative")
+        return self
+
+    @property
+    def validation_priority(self) -> Priority:
+        """Return the canonical priority used for raw LLM validation."""
+
+        return self.llm_expected_priority or self.expected_priority
+
+    @property
+    def validation_category(self) -> str:
+        """Return the canonical category used for raw LLM validation."""
+
+        return self.llm_expected_category or self.expected_category
 
 
 class ExpectedResults(FrozenModel):

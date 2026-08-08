@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -269,8 +270,21 @@ class OpenAICompatibleProvider:
             analysis_timezone=self.settings.analysis_timezone,
             max_body_characters=self.settings.max_body_characters,
         )
+        system_message = prompt.system_message
+        if self.settings.provider is OpenAICompatibleService.DEEPSEEK:
+            response_schema = json.dumps(
+                prompt.response_model.model_json_schema(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            system_message = (
+                f"{system_message}\n\n"
+                "响应必须严格匹配下面的 JSON Schema。所有 required 字段都必须出现；"
+                "nullable 字段在无值时使用 null；不得增加 Schema 之外的字段。\n"
+                f"{response_schema}"
+            )
         return [
-            {"role": "system", "content": prompt.system_message},
+            {"role": "system", "content": system_message},
             {"role": "user", "content": prompt.user_message},
         ]
 
@@ -319,6 +333,7 @@ class OpenAICompatibleProvider:
             messages=messages,
             response_format={"type": "json_object"},
             max_tokens=self.settings.max_completion_tokens,
+            extra_body={"thinking": {"type": "disabled"}},
         )
         if not completion.choices:
             raise LLMProviderResponseError(

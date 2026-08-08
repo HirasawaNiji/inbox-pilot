@@ -94,7 +94,7 @@ def test_fake_provider_returns_traceable_result_and_records_call() -> None:
     assert result.analysis == make_analysis()
     assert result.provider == "fake"
     assert result.model_name == "fake-structured-v1"
-    assert result.prompt_version == "triage-v1"
+    assert result.prompt_version == "triage-v4"
     assert result.analyzed_at == fixed_clock()
     assert result.duration_ms == 125
     assert result.usage == usage
