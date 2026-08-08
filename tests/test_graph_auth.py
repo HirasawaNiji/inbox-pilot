@@ -23,6 +23,7 @@ class FakePublicClient:
         silent_result: dict[str, Any] | None = None,
         device_flow: dict[str, Any] | None = None,
         device_result: dict[str, Any] | None = None,
+        expected_scopes: tuple[str, ...] = ("Mail.Read",),
     ) -> None:
         self.accounts = accounts or []
         self.silent_result = silent_result
@@ -33,6 +34,7 @@ class FakePublicClient:
         self.device_result = device_result or {"access_token": "device-token"}
         self.silent_calls = 0
         self.device_calls = 0
+        self.expected_scopes = expected_scopes
 
     def get_accounts(self, username: str | None = None) -> list[dict[str, Any]]:
         return list(self.accounts)
@@ -45,7 +47,7 @@ class FakePublicClient:
     ) -> dict[str, Any] | None:
         self.silent_calls += 1
         assert isinstance(scopes, list)
-        assert tuple(scopes) == ("Mail.Read",)
+        assert tuple(scopes) == self.expected_scopes
         return self.silent_result
 
     def initiate_device_flow(
@@ -54,7 +56,7 @@ class FakePublicClient:
         **kwargs: Any,
     ) -> dict[str, Any]:
         assert isinstance(scopes, list)
-        assert tuple(scopes or ()) == ("Mail.Read",)
+        assert tuple(scopes or ()) == self.expected_scopes
         return dict(self.device_flow)
 
     def acquire_token_by_device_flow(
@@ -91,6 +93,18 @@ def test_silent_authentication_requires_cached_account_and_token() -> None:
     app = FakePublicClient(accounts=[{"username": "student@outlook.com"}])
     with pytest.raises(GraphLoginRequiredError, match="run outlook login again"):
         GraphTokenProvider(app, ("Mail.Read",)).acquire_silent()
+
+
+def test_write_authentication_points_to_isolated_login_command() -> None:
+    app = FakePublicClient(expected_scopes=("Mail.ReadWrite",))
+    provider = GraphTokenProvider(
+        app,
+        ("Mail.ReadWrite",),
+        login_command="outlook write-login",
+    )
+
+    with pytest.raises(GraphLoginRequiredError, match="outlook write-login"):
+        provider.acquire_silent()
 
 
 def test_login_uses_cached_token_without_device_prompt() -> None:

@@ -4,9 +4,9 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 学生邮箱场景的可解�
 
 ## 项目状态
 
-**阶段一、阶段二和阶段 2.5 已完成。下一步进入阶段三前半：人工确认、dry-run、审计、幂等与回滚。**
+**阶段一、阶段二、阶段 2.5、阶段三前半以及阶段三后半的单动作写入链路已完成。2026-08-09 已通过个人 Outlook 单封测试邮件真实验收；真实回滚和小批量验收尚未完成。**
 
-默认流程仍完全离线；用户显式创建本地 Graph 配置并完成授权后，可以只读同步个人 Outlook 收件箱。当前没有写回、移动、删除或发送邮件的能力。另在显式提供本地 LLM 配置和环境变量 API Key 后，可选择调用 OpenAI 或 DeepSeek 分析邮件。
+默认流程仍完全离线；用户显式创建本地 Graph 配置并完成授权后，可以只读同步个人 Outlook 收件箱。项目也提供仅能修改单封邮件 `categories` 的受控执行 CLI 和零写请求的只读对账 CLI；它们必须使用独立写配置、静默令牌、明确动作 ID 与幂等键，且不提供批量执行或自动重试。移动、删除和发送邮件始终不在允许范围。另在显式提供本地 LLM 配置和环境变量 API Key 后，可选择调用 OpenAI 或 DeepSeek 分析邮件。
 
 阶段一成果：
 
@@ -14,7 +14,7 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 学生邮箱场景的可解�
 - P1～P5 优先级、0～100 分、稳定类别、摘要、截止时间和人工复核标记；
 - 每次分数变化均包含原因代码、说明、变化值和匹配内容；
 - `demo`、`analyze`、`evaluate` 三个 CLI 命令，支持表格和 JSON 输出；
-- 当前 233 项自动化测试全部通过，总覆盖率 92.17%，最低门槛为 80%；
+- 当前 367 项自动化测试全部通过，总覆盖率 87.99%，最低门槛为 80%；
 - pytest、Ruff、格式检查、mypy 和全新隔离环境安装验证全部通过。
 
 详细证据见[阶段一验收报告](docs/stage1_acceptance.md)。
@@ -54,6 +54,24 @@ Microsoft Graph 真实环境验收已于 2026-08-08 完成。其他开发者可�
 - [x] 使用显式优先级容差重新验证 `triage-v4`；本地验收在允许范围内达到 80%，阶段 2.5 基本通过。
 
 阶段 2.5 的配置、安全边界、验收门槛、运行命令和真实验证记录见[阶段 2.5 DeepSeek 真实验证指南](docs/stage2_5_deepseek_validation.md)。OpenAI / DeepSeek 的配置、密钥保护与故障排查见[真实 LLM Provider 接入指南](docs/llm_provider.md)。Outlook 分类写回已移动到阶段三后半部分；只有人工确认、dry-run、审计、幂等和回滚机制先通过验收后，才会考虑提升邮箱权限。
+
+### 阶段三进度
+
+- [x] 步骤一：实现不可变邮箱动作模型、分类写入计划、证据快照和白名单状态机；
+- [x] 步骤二：实现本地人工确认队列、原子 JSON 持久化及批准/拒绝 CLI；
+- [x] 步骤三：实现只处理已批准动作且 Graph 写请求固定为零的分类 dry-run；
+- [x] 步骤四：实现隐私受限、确定性去重并执行 fsync 的追加式 JSONL 审计日志；
+- [x] 步骤五：实现稳定幂等键、跨进程文件锁、原子执行认领、失败重试与陈旧执行恢复；
+- [x] 步骤六：实现只针对成功动作、必须填写原因、具有独立幂等键且 Graph 写请求固定为零的受控回滚 dry-run，并完成前半阶段离线验收；
+- [x] 后半步骤一：增加默认关闭的独立 `Mail.ReadWrite` 配置、隔离的加密令牌缓存、只授权不写入的 CLI，以及可持久化验证的 Immutable ID 契约；
+- [x] 后半步骤二：实现严格 allowlist 的 Graph 分类写客户端，将目标固定为 Immutable Message ID、方法固定为 `PATCH`、请求体固定为 `categories`，并禁止重定向和自动重试；
+- [x] 后半步骤三：实现写前重读、`changeKey` 与分类冲突防护、已批准动作执行器，以及禁止盲目重试的 `write_in_flight` / `outcome_unknown` 状态；
+- [x] 后半步骤四：接入隐私受限的 Graph 操作审计，并实现 `write_in_flight` / `outcome_unknown` 四分支只读对账；
+- [x] 后半步骤五：提供默认关闭、一次只处理一个明确动作、必须重复确认 Action ID 且只使用静默令牌的真实执行 CLI，以及固定零 PATCH 的只读对账 CLI；
+- [x] 后半步骤六：完成个人 Outlook 单封测试邮件真实写入验收，确认 InboxPilot 分类符合计划、非托管分类得到保留，且邮件未被移动、删除、发送或改写；
+- [ ] 后半后续：实现真实受控回滚并完成小批量真实验收。
+
+步骤一的数据契约、安全边界和状态迁移详见[阶段三动作模型与状态机](docs/stage3_action_models.md)；队列生成、查询和人工确认命令见[阶段三本地人工确认队列](docs/stage3_review_queue.md)；分类差异预览见[阶段三 Outlook 分类 dry-run](docs/stage3_dry_run.md)；事件类型、隐私字段和 JSONL 操作见[阶段三追加式动作审计日志](docs/stage3_audit_log.md)；幂等键、并发锁、执行认领和重试约束见[阶段三幂等与安全重试](docs/stage3_idempotency_and_retry.md)；恢复目标、回滚命令和快照边界见[阶段三受控回滚计划](docs/stage3_rollback.md)。阶段三前半的质量与安全证据汇总于[离线验收报告](docs/stage3_front_half_acceptance.md)。阶段三后半的独立权限配置、授权命令和 ID 迁移约束见[写权限与 Immutable ID 基础](docs/stage3_write_permission_foundation.md)，分类写入的固定端点、响应验证和错误边界见[Graph 分类写客户端](docs/stage3_graph_category_write_client.md)，写前冲突检查与防崩溃状态见[受控执行器](docs/stage3_preflight_executor.md)，Graph 操作审计和四分支对账见[执行审计与对账](docs/stage3_execution_audit_and_reconciliation.md)，真实入口的确认门、命令和退出码见[单动作执行与对账 CLI](docs/stage3_single_action_cli.md)，真实环境证据见[单封 Outlook 写入验收报告](docs/stage3_single_message_acceptance.md)。
 
 ## 快速开始
 
@@ -171,13 +189,15 @@ uv run inbox-agent analyze data/private/outlook_inbox.json
 
 `graph.local.yaml`、令牌缓存、Delta 状态和真实邮件均由 `.gitignore` 排除。完整的应用注册、字段说明、安全检查和验收步骤见[个人 Outlook 只读同步指南](docs/microsoft_graph_sync.md)。
 
+阶段三后半的写权限授权使用独立的 `graph_write.local.yaml` 和令牌缓存，默认关闭。`outlook write-login` 本身只完成授权、不写邮箱；`actions execute` 则可能真实修改一封邮件的分类。启用前必须阅读[写权限与 Immutable ID 基础](docs/stage3_write_permission_foundation.md)和[单动作执行与对账 CLI](docs/stage3_single_action_cli.md)。
+
 ### CLI 退出码
 
 | 退出码 | 含义 |
 | --- | --- |
 | `0` | 命令成功 |
-| `1` | 数据集、人工标签、YAML 配置或 API Key 环境变量无法加载或校验失败 |
-| `2` | 分析或真实模型验证完成，但至少一封规则或 LLM 分析失败 |
+| `1` | 数据集、人工标签、YAML、认证、确认门、队列或审计无法加载或校验失败 |
+| `2` | 分析中存在失败；或单动作执行/对账已完成但结果为冲突、失败或仍不确定 |
 | `3` | 离线评测不一致，或真实模型验证指标未达到门槛 |
 
 ## 阶段一实现范围
@@ -350,7 +370,8 @@ inbox-pilot/
 │   ├── llm_fusion.yaml                   # 规则与 LLM 安全融合
 │   ├── llm_provider.example.yaml         # OpenAI / DeepSeek 公开配置模板
 │   ├── deepseek_validation.example.yaml  # 50 封真实模型验证模板
-│   └── graph.example.yaml                # 个人 Outlook 只读同步配置模板
+│   ├── graph.example.yaml                # 个人 Outlook 只读同步配置模板
+│   └── graph_write.example.yaml          # 默认关闭的独立写权限授权模板
 ├── data/
 │   ├── samples/
 │   │   ├── sample_emails.json            # 阶段 2.5 的 50 封主 demo
@@ -366,6 +387,10 @@ inbox-pilot/
 │   ├── llm_provider.md                   # 真实 Provider 配置与安全指南
 │   ├── llm_routing.md                    # LLM 调用路由配置指南
 │   ├── microsoft_graph_sync.md            # 个人 Outlook 应用注册与同步指南
+│   ├── stage3_graph_category_write_client.md # Graph 分类写客户端安全边界
+│   ├── stage3_execution_audit_and_reconciliation.md # 执行审计与只读对账
+│   ├── stage3_preflight_executor.md       # 写前重读与受控执行器
+│   ├── stage3_write_permission_foundation.md # 写权限隔离与 Immutable ID 指南
 │   ├── rules_configuration.md            # YAML 规则修改指南
 │   ├── stage2_5_deepseek_validation.md    # 50 封 DeepSeek 真实验证指南
 │   └── stage1_acceptance.md              # 阶段一验收报告
@@ -461,8 +486,8 @@ uv run mypy src
 4. [x] 将主 demo 扩展到 50 封，并实现 DeepSeek 全量验证与 Token 统计；
 5. [x] 完成首次 DeepSeek 真实运行并记录 `triage-v3` 基线；
 6. [x] 复测 `triage-v4`，按显式容差口径完成阶段 2.5 基本验收；
-7. [ ] 阶段三前半：实现人工确认、dry-run、审计、幂等和回滚机制；
-8. [ ] 阶段三后半：在明确授权后申请写权限并写回 Outlook 分类；
+7. [x] 阶段三前半：动作模型、人工确认、dry-run、审计、幂等重试、受控回滚计划和离线验收全部完成；
+8. [ ] 阶段三后半：独立权限、受控执行、审计、只读对账、单动作 CLI 和单封真实验收已完成，待真实回滚和小批量验收；
 9. [ ] 增加 Web 演示界面和 GitHub Actions 持续集成。
 
 ## License

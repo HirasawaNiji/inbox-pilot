@@ -5,13 +5,16 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import Final, Literal, cast
 from urllib.parse import urlsplit
 
 import httpx
 
 from inbox_agent.graph.auth import GraphAccessToken
 from inbox_agent.graph.config import GraphSettings
+
+GRAPH_MESSAGE_ID_TYPE: Final[Literal["restImmutableEntryId"]] = "restImmutableEntryId"
+GRAPH_IMMUTABLE_ID_PREFER: Final = 'IdType="ImmutableId"'
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +35,7 @@ class GraphURLRejectedError(GraphRequestError):
 
 
 class GraphAuthorizationError(GraphRequestError):
-    """Raised when Graph rejects the delegated token or Mail.Read consent."""
+    """Raised when Graph rejects the delegated token or required permission."""
 
 
 class GraphThrottledError(GraphRequestError):
@@ -103,7 +106,7 @@ class GraphMailClient:
         headers = {
             "Authorization": f"Bearer {token.access_token}",
             "Accept": "application/json",
-            "Prefer": (f'IdType="ImmutableId", odata.maxpagesize={self.settings.page_size}'),
+            "Prefer": (f"{GRAPH_IMMUTABLE_ID_PREFER}, odata.maxpagesize={self.settings.page_size}"),
         }
         try:
             response = self._http_client.get(

@@ -21,6 +21,7 @@ from inbox_agent.models import (
     MessageFeatures,
     NormalizedMessage,
     Priority,
+    RuleEvaluation,
     TriageResult,
 )
 from inbox_agent.normalizer import normalize_message
@@ -51,6 +52,7 @@ class AnalysisReport(FrozenModel):
     policy_version: str
     evaluated_at: datetime
     results: tuple[TriageResult, ...] = ()
+    rule_evaluations: tuple[RuleEvaluation, ...] = ()
     failures: tuple[AnalysisFailure, ...] = ()
     llm_analyses: tuple[LLMAnalysisResult, ...] = ()
     llm_failures: tuple[AnalysisFailure, ...] = ()
@@ -259,6 +261,16 @@ class OfflinePipeline:
     ) -> tuple[NormalizedMessage, TriageResult]:
         """Normalize and evaluate one validated provider message."""
 
+        normalized, _, result = self._analyze_message_with_evaluation(message, evaluated_at)
+        return normalized, result
+
+    def _analyze_message_with_evaluation(
+        self,
+        message: EmailMessage,
+        evaluated_at: datetime,
+    ) -> tuple[NormalizedMessage, RuleEvaluation, TriageResult]:
+        """Return one public result together with its private rule evidence."""
+
         normalized = normalize_message(message)
         features = self.engine.extract_features(normalized)
         evaluation = self.engine.evaluate(normalized)
@@ -276,7 +288,7 @@ class OfflinePipeline:
             evaluated_at=evaluated_at,
             policy_version=self.engine.policy.policy_version,
         )
-        return normalized, result
+        return normalized, evaluation, result
 
     def analyze_dataset(
         self,
@@ -289,6 +301,7 @@ class OfflinePipeline:
 
         run_time = evaluated_at or datetime.now(UTC)
         successful: list[tuple[datetime, TriageResult]] = []
+        rule_evaluations: dict[str, RuleEvaluation] = {}
         failures: list[AnalysisFailure] = []
         llm_analyses: dict[str, LLMAnalysisResult] = {}
         llm_failures: list[AnalysisFailure] = []
@@ -298,11 +311,15 @@ class OfflinePipeline:
 
         for message in dataset.messages:
             try:
-                normalized, result = self.analyze_message(message, run_time)
+                normalized, evaluation, result = self._analyze_message_with_evaluation(
+                    message,
+                    run_time,
+                )
             except Exception as error:  # noqa: BLE001 - dataset isolation is intentional
                 failures.append(_failure_record(message.source_id, "message_analysis", error))
                 continue
             successful.append((normalized.received_at, result))
+            rule_evaluations[normalized.source_id] = evaluation
 
             if self.llm_provider is not None and not llm_stopped:
                 assert self.llm_router is not None
@@ -364,6 +381,7 @@ class OfflinePipeline:
             policy_version=self.engine.policy.policy_version,
             evaluated_at=run_time,
             results=tuple(result for _, result in successful),
+            rule_evaluations=tuple(rule_evaluations[result.message_id] for _, result in successful),
             failures=tuple(failures),
             llm_analyses=tuple(
                 llm_analyses[result.message_id]

@@ -81,6 +81,7 @@ def test_pipeline_analyzes_complete_sample_dataset() -> None:
     assert report.evaluated_at == EVALUATED_AT
     assert report.llm_analysis_count == 0
     assert report.llm_failure_count == 0
+    assert len(report.rule_evaluations) == 50
 
 
 def test_pipeline_priorities_and_categories_match_human_labels() -> None:
@@ -160,6 +161,7 @@ def test_pipeline_report_serializes_to_json_values() -> None:
     assert serialized["results"][0]["decision_source"] == "rule"
     assert serialized["evaluated_at"] == "2026-08-07T18:00:00Z"
     assert serialized["llm_analyses"] == []
+    assert len(serialized["rule_evaluations"]) == 50
     assert serialized["llm_failures"] == []
     assert serialized["llm_routing_decisions"] == []
     assert serialized["llm_fusion_decisions"] == []

@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 from pydantic import Field, ValidationError
 
 from inbox_agent.graph.auth import GraphAccessToken
-from inbox_agent.graph.client import GraphMailClient
+from inbox_agent.graph.client import GRAPH_MESSAGE_ID_TYPE, GraphMailClient
 from inbox_agent.graph.config import GraphSettings
 from inbox_agent.graph.mapper import map_graph_message
 from inbox_agent.loader import DatasetLoadError, load_dataset
@@ -32,14 +32,22 @@ GRAPH_MESSAGE_FIELDS = (
     "bodyPreview",
     "importance",
     "inferenceClassification",
+    "categories",
+    "changeKey",
     "hasAttachments",
 )
+GRAPH_SYNC_QUERY_CONTRACT_VERSION = "2.0"
 
 
 class GraphSyncState(FrozenModel):
     """Opaque delta checkpoint that never leaves private local storage."""
 
     schema_version: str = "1.0"
+    query_contract_version: str = Field(
+        default=GRAPH_SYNC_QUERY_CONTRACT_VERSION,
+        pattern=r"^2[.]0$",
+    )
+    message_id_type: str = Field(default=GRAPH_MESSAGE_ID_TYPE, pattern=r"^restImmutableEntryId$")
     mail_folder: str = Field(pattern=r"^inbox$")
     delta_link: str = Field(min_length=1, max_length=20_000)
     synchronized_at: datetime
@@ -57,6 +65,7 @@ class GraphSyncReport(FrozenModel):
     """Auditable counts for one complete or partially mapped delta round."""
 
     started_from_delta: bool
+    message_id_type: str = Field(default=GRAPH_MESSAGE_ID_TYPE, pattern=r"^restImmutableEntryId$")
     completed: bool
     pages_fetched: int = Field(ge=0)
     created_count: int = Field(ge=0)
@@ -89,7 +98,19 @@ def _read_state(path: Path) -> GraphSyncState | None:
     except OSError as error:
         raise GraphSyncStorageError(f"Unable to read private Graph state: {path}") from error
     try:
-        return GraphSyncState.model_validate_json(raw_content)
+        payload = json.loads(raw_content)
+    except json.JSONDecodeError as error:
+        raise GraphSyncStorageError(f"Private Graph state is invalid: {path}") from error
+    if not isinstance(payload, dict):
+        raise GraphSyncStorageError(f"Private Graph state is invalid: {path}")
+
+    # Delta links retain the query options from their original request. States
+    # created before the write-safety fields were selected cannot supply a
+    # category snapshot or changeKey, so force one fresh read-only round.
+    if payload.get("query_contract_version") != GRAPH_SYNC_QUERY_CONTRACT_VERSION:
+        return None
+    try:
+        return GraphSyncState.model_validate(payload)
     except ValidationError as error:
         raise GraphSyncStorageError(f"Private Graph state is invalid: {path}") from error
 

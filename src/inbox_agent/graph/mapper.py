@@ -51,6 +51,8 @@ class GraphMessagePayload(FrozenModel):
         default=None,
         alias="inferenceClassification",
     )
+    categories: tuple[str, ...] = Field(default=(), max_length=100)
+    change_key: str | None = Field(default=None, alias="changeKey", min_length=1, max_length=512)
     has_attachments: bool = Field(default=False, alias="hasAttachments")
 
 
@@ -91,5 +93,7 @@ def map_graph_message(payload: object) -> EmailMessage:
         body_preview=message.body_preview,
         importance=message.importance,
         inference_classification=message.inference_classification,
+        categories=message.categories,
+        change_key=message.change_key,
         has_attachments=message.has_attachments,
     )
