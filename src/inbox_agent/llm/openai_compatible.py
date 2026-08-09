@@ -244,8 +244,21 @@ class OpenAICompatibleProvider:
         api_key = values.get(settings.api_key_env, "").strip()
         if not api_key:
             raise LLMProviderCredentialError(settings.api_key_env)
+        return cls.from_settings(settings, api_key)
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: OpenAICompatibleSettings,
+        api_key: str,
+    ) -> OpenAICompatibleProvider:
+        """Build a provider from validated in-memory settings and a transient key."""
+
+        normalized_key = api_key.strip()
+        if not normalized_key:
+            raise LLMProviderCredentialError(settings.api_key_env)
         client = OpenAI(
-            api_key=api_key,
+            api_key=normalized_key,
             base_url=settings.base_url,
             timeout=settings.timeout_seconds,
             max_retries=settings.max_retries,

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}正在退出 · InboxPilot{% endblock %}
+{% block page_title %}服务正在退出{% endblock %}
+{% block content %}
+<section class="result-card">
+  <div class="result-icon" aria-hidden="true">✓</div>
+  <p class="eyebrow">Graceful shutdown</p>
+  <h2>Web 进程已收到退出请求</h2>
+  <p class="summary-copy">当前响应完成后，服务器会等待受管同步安全停止、关闭数据库连接并释放监听端口。现在可以关闭此网页。</p>
+  <div class="notice neutral">再次使用时运行 <span class="monospace">uv run inbox-agent web start</span>。</div>
+</section>
+{% endblock %}

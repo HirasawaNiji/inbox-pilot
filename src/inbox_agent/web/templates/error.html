@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}操作未完成 · InboxPilot{% endblock %}
+{% block page_title %}操作未完成{% endblock %}
+{% block content %}
+<section class="result-card error-result">
+  <span class="result-icon" aria-hidden="true">!</span>
+  <p class="eyebrow">{{ error_code }}</p>
+  <h2>{{ error_message }}</h2>
+  <p>请求 ID：{{ request.state.request_id }}</p>
+  <div class="form-actions centered"><a class="button primary" href="/console">返回总览</a><a class="button secondary" href="/console/actions">查看动作队列</a></div>
+</section>
+{% endblock %}

@@ -1,0 +1,70 @@
+<section id="action-workspace" class="action-workspace" aria-live="polite">
+  {% if notice %}<div class="notice success">{{ notice }}</div>{% endif %}
+  <div class="action-status-line">
+    <span class="priority priority-large priority-{{ action.evidence.triage_result.priority.value|lower }}">{{ action.evidence.triage_result.priority.value }}</span>
+    <div><p class="eyebrow">当前状态</p><strong>{{ action.status.value }}</strong></div>
+    <span class="tag">{{ action.evidence.triage_result.category }}</span>
+  </div>
+
+  <div class="panel inset-panel">
+    <p class="eyebrow">为什么建议这个动作</p>
+    <h2>{{ action.evidence.triage_result.summary }}</h2>
+    <p>{{ action.evidence.triage_result.reasons|map(attribute='description')|join('；') or '使用基础规则结果。' }}</p>
+    <div class="category-diff-mini">
+      <div><small>当前类别</small>{% for category in action.current_snapshot.categories %}<span class="tag neutral">{{ category }}</span>{% else %}<span class="muted">无</span>{% endfor %}</div>
+      <div><small>计划管理类别</small>{% for category in action.write_plan.managed_categories %}<span class="tag">{{ category }}</span>{% endfor %}</div>
+    </div>
+  </div>
+
+  {% if can_review %}
+    <div class="decision-forms">
+      <form method="post" action="/console/actions/{{ action.action_id }}/approve"
+            hx-post="/console/actions/{{ action.action_id }}/approve" hx-target="#action-workspace" hx-swap="outerHTML">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <label>审批备注（可选）<input name="note" maxlength="1000" placeholder="例如：已核对分类理由"></label>
+        <button class="button primary" type="submit">批准动作</button>
+      </form>
+      <form method="post" action="/console/actions/{{ action.action_id }}/reject"
+            hx-post="/console/actions/{{ action.action_id }}/reject" hx-target="#action-workspace" hx-swap="outerHTML">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <label>拒绝原因（可选）<input name="reason" maxlength="1000" placeholder="例如：分类不符合预期"></label>
+        <button class="button danger-secondary" type="submit">拒绝动作</button>
+      </form>
+    </div>
+  {% elif can_preview %}
+    <div class="safe-next-step">
+      <div><strong>批准不等于写回</strong><p>下一页会先生成零写入预览，再要求精确输入 Action ID。</p></div>
+      <a class="button primary" href="/console/actions/{{ action.action_id }}/execute">预览实际变更</a>
+    </div>
+  {% elif can_reconcile %}
+    <form method="post" action="/console/actions/{{ action.action_id }}/reconcile" class="safe-next-step">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div><strong>写回结果不确定</strong><p>执行一次 GET、零 PATCH 的只读对账，不会盲目重试。</p></div>
+      <button class="button primary" type="submit">开始只读对账</button>
+    </form>
+  {% elif can_rollback %}
+    <form method="post" action="/console/actions/{{ action.action_id }}/rollback/preview" class="rollback-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div><strong>受控回滚</strong><p>只恢复 InboxPilot 管理的类别，并保留实时存在的用户类别。</p></div>
+      <label>回滚原因<input name="reason" required maxlength="1000" placeholder="说明为什么需要撤销本次分类"></label>
+      <button class="button danger-secondary" type="submit">生成回滚预览</button>
+    </form>
+  {% elif can_rollback_reconcile %}
+    <form method="post" action="/console/actions/{{ action.action_id }}/rollback/reconcile" class="safe-next-step">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div><strong>回滚结果不确定</strong><p>执行一次 GET、零 PATCH 的回滚对账。</p></div>
+      <button class="button primary" type="submit">开始回滚对账</button>
+    </form>
+  {% else %}
+    <div class="notice neutral">当前状态没有可用的人工操作。</div>
+  {% endif %}
+
+  {% if action.transition_history %}
+    <section class="timeline">
+      <h2>状态历史</h2>
+      {% for transition in action.transition_history|reverse %}
+        <article><span></span><div><strong>{{ transition.from_status.value }} → {{ transition.to_status.value }}</strong><small>{{ transition.occurred_at|local_datetime }} · {{ transition.actor.value }}{% if transition.note %} · {{ transition.note }}{% endif %}</small></div></article>
+      {% endfor %}
+    </section>
+  {% endif %}
+</section>

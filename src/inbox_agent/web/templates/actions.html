@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}动作队列 · InboxPilot{% endblock %}
+{% block page_title %}Outlook 动作队列{% endblock %}
+{% block content %}
+<section class="panel filter-panel">
+  <form class="filters compact-filters" method="get" action="/console/actions">
+    <label>状态
+      <select name="status">
+        <option value="">全部</option>
+        {% for item in ['pending_review', 'approved', 'rejected', 'succeeded', 'failed', 'outcome_unknown', 'rollback_outcome_unknown', 'rolled_back'] %}
+          <option value="{{ item }}" {% if selected_status and selected_status.value == item %}selected{% endif %}>{{ item }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="button primary" type="submit">筛选</button>
+    <a class="button ghost" href="/console/actions">清除</a>
+  </form>
+</section>
+<section class="panel table-panel">
+  <div class="panel-header"><div><p class="eyebrow">受控队列</p><h2>{{ page.total }} 个动作</h2></div><span class="muted">每次只允许处理一个动作</span></div>
+  <div class="action-list">
+    {% for action in page.items %}
+      <a class="action-row" href="/console/actions/{{ action.action_id }}">
+        <span class="priority priority-{{ action.evidence.triage_result.priority.value|lower }}">{{ action.evidence.triage_result.priority.value }}</span>
+        <span class="action-copy"><strong>{{ action.evidence.triage_result.summary }}</strong><small>{{ action.action_id }} · 更新于 {{ action.updated_at|local_datetime }}</small></span>
+        <span class="status-pill status-{{ action.status.value }}">{{ action.status.value }}</span>
+      </a>
+    {% else %}
+      <div class="empty-state"><strong>动作队列为空</strong><p>运行工作流后，新的分类建议会在这里等待确认。</p></div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

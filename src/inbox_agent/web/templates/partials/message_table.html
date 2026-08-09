@@ -1,0 +1,39 @@
+<section id="message-results" class="panel table-panel" aria-live="polite">
+  <div class="panel-header">
+    <div>
+      <p class="eyebrow">筛选结果</p>
+      <h2>{{ page.total }} 封邮件</h2>
+    </div>
+    <span class="muted">第 {{ page.offset + 1 if page.total else 0 }}～{{ [page.offset + page.items|length, page.total]|min }} 封</span>
+  </div>
+  {% if page.items %}
+    <div class="message-list">
+      {% for message in page.items %}
+        <a class="message-row" href="/console/messages/{{ message.database_id }}">
+          <span class="priority priority-{{ (message.priority.value if message.priority else 'NA')|lower }}">
+            {{ message.priority.value if message.priority else '—' }}
+          </span>
+          <span class="message-copy">
+            <span class="message-title">{{ message.subject or '（无主题）' }}</span>
+            <span class="message-meta">{{ message.sender_name or message.sender_address }} · {{ message.received_at|local_datetime }}</span>
+            <span class="message-preview">{{ message.body_preview or '没有正文预览' }}</span>
+          </span>
+          <span class="message-tags">
+            {% if message.category %}<span class="tag">{{ message.category }}</span>{% endif %}
+            {% if message.requires_review %}<span class="tag warning">待复核</span>{% endif %}
+            {% if message.has_attachments %}<span class="tag neutral">附件</span>{% endif %}
+          </span>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <strong>没有符合条件的邮件</strong>
+      <p>尝试清除筛选条件，或等待下一次工作流同步。</p>
+    </div>
+  {% endif %}
+  <nav class="pagination" aria-label="邮件分页">
+    {% if previous_url %}<a class="button secondary" href="{{ previous_url }}">上一页</a>{% endif %}
+    {% if next_url %}<a class="button secondary" href="{{ next_url }}">下一页</a>{% endif %}
+  </nav>
+</section>

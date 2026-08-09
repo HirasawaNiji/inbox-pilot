@@ -13,7 +13,7 @@ from inbox_agent.graph import (
     GraphTokenProvider,
     load_graph_settings,
 )
-from inbox_agent.llm import OpenAICompatibleProvider
+from inbox_agent.llm import LLMProvider, OpenAICompatibleProvider
 from inbox_agent.pipeline import OfflinePipeline
 from inbox_agent.storage import Database, upgrade_database
 from inbox_agent.workflow.models import DatasetSyncResult, WorkflowReport
@@ -75,26 +75,29 @@ def execute_workflow(
     settings: WorkflowRuntimeSettings,
     *,
     force: bool = False,
+    llm_provider: LLMProvider | None = None,
 ) -> WorkflowReport:
     """Build dependencies, execute one workflow, and always dispose SQLite resources."""
 
     configured = settings.resolved()
-    llm_provider = (
-        OpenAICompatibleProvider.from_yaml(configured.llm_config_path)
+    provider = (
+        llm_provider
+        if llm_provider is not None
+        else OpenAICompatibleProvider.from_yaml(configured.llm_config_path)
         if configured.llm_config_path is not None
         else None
     )
     pipeline = OfflinePipeline.from_yaml(
         configured.policy_path,
-        llm_provider=llm_provider,
-        llm_routing_path=configured.llm_routing_path if llm_provider is not None else None,
-        llm_fusion_path=configured.llm_fusion_path if llm_provider is not None else None,
+        llm_provider=provider,
+        llm_routing_path=configured.llm_routing_path if provider is not None else None,
+        llm_fusion_path=configured.llm_fusion_path if provider is not None else None,
     )
     profile = build_analysis_profile(
         configured.policy_path,
-        llm_provider=llm_provider,
-        llm_routing_path=configured.llm_routing_path if llm_provider is not None else None,
-        llm_fusion_path=configured.llm_fusion_path if llm_provider is not None else None,
+        llm_provider=provider,
+        llm_routing_path=configured.llm_routing_path if provider is not None else None,
+        llm_fusion_path=configured.llm_fusion_path if provider is not None else None,
     )
     upgrade_database(configured.database_path)
     database = Database(configured.database_path)
@@ -139,7 +142,7 @@ def execute_workflow(
             analysis_profile=profile,
             action_queue_path=configured.action_queue_path,
             audit_log_path=configured.audit_log_path,
-            llm_provider=llm_provider,
+            llm_provider=provider,
         ).run(configured.dataset_path, force=force, dataset_sync=dataset_sync)
     finally:
         database.dispose()

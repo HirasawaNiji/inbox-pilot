@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}总览 · InboxPilot{% endblock %}
+{% block page_title %}今天的收件箱{% endblock %}
+{% block content %}
+<section class="hero-grid">
+  <article class="hero-card">
+    <p class="eyebrow">需要关注</p>
+    <strong class="hero-number">{{ priority_counts['P1'] + priority_counts['P2'] }}</strong>
+    <p>P1 / P2 高优先级邮件</p>
+    <a href="/console/inbox?priority=P1">查看最高优先级 →</a>
+  </article>
+  <article class="hero-card accent-warm">
+    <p class="eyebrow">等待判断</p>
+    <strong class="hero-number">{{ review_count }}</strong>
+    <p>封邮件需要人工复核</p>
+    <a href="/console/reviews">进入复核队列 →</a>
+  </article>
+  <article class="hero-card accent-cool">
+    <p class="eyebrow">等待确认</p>
+    <strong class="hero-number">{{ action_counts.get('pending_review', 0) }}</strong>
+    <p>个 Outlook 分类动作</p>
+    <a href="/console/actions?status=pending_review">检查动作 →</a>
+  </article>
+</section>
+
+<section class="priority-strip" aria-label="优先级分布">
+  {% for priority in ['P1', 'P2', 'P3', 'P4', 'P5'] %}
+    <a href="/console/inbox?priority={{ priority }}" class="priority-cell priority-cell-{{ priority|lower }}">
+      <span>{{ priority }}</span><strong>{{ priority_counts[priority] }}</strong>
+    </a>
+  {% endfor %}
+</section>
+
+<div class="content-grid dashboard-grid">
+  <section class="panel">
+    <div class="panel-header">
+      <div><p class="eyebrow">刚刚到达</p><h2>最近邮件</h2></div>
+      <a href="/console/inbox">查看全部</a>
+    </div>
+    {% if recent.items %}
+      <div class="compact-list">
+        {% for message in recent.items %}
+          <a href="/console/messages/{{ message.database_id }}" class="compact-row">
+            <span class="priority priority-{{ (message.priority.value if message.priority else 'NA')|lower }}">{{ message.priority.value if message.priority else '—' }}</span>
+            <span><strong>{{ message.subject or '（无主题）' }}</strong><small>{{ message.sender_name or message.sender_address }}</small></span>
+            <time>{{ message.received_at|local_datetime }}</time>
+          </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state"><strong>数据库中还没有邮件</strong></div>
+    {% endif %}
+  </section>
+
+  <aside class="panel status-panel">
+    <div class="panel-header"><div><p class="eyebrow">Agent 状态</p><h2>运行概况</h2></div></div>
+    <dl class="status-list">
+      <div><dt>最近工作流</dt><dd>{{ workflow.status if workflow else '暂无记录' }}</dd></div>
+      <div><dt>当前步骤</dt><dd>{{ workflow.current_step if workflow and workflow.current_step else '—' }}</dd></div>
+      <div><dt>开始时间</dt><dd>{{ workflow.started_at|local_datetime if workflow else '—' }}</dd></div>
+      <div><dt>自动同步</dt><dd>{{ '本网页管理中' if agent.sync_owned else '外部进程运行中' if agent.sync_external else '未启动' }}</dd></div>
+      <div><dt>LLM</dt><dd>{{ (agent.llm_provider.value ~ ' / ' ~ agent.llm_model) if agent.llm_enabled else '关闭（默认）' }}</dd></div>
+    </dl>
+    {% if agent.sync_owned %}
+      <form method="post" action="/console/operations/sync/stop">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="button danger-secondary full" type="submit">停止自动同步</button>
+      </form>
+    {% elif agent.sync_external %}
+      <div class="notice neutral">同步由另一个终端管理，请在那里停止。</div>
+    {% elif agent.service_configured %}
+      <form method="post" action="/console/operations/sync/start">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="button primary full" type="submit">启动自动同步</button>
+      </form>
+    {% else %}
+      <button class="button secondary full" type="button" disabled>同步配置不可用</button>
+    {% endif %}
+    <a class="button secondary full" href="/console/operations">查看运行步骤</a>
+  </aside>
+</div>
+{% endblock %}

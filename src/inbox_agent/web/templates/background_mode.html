@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}转入后台 · InboxPilot{% endblock %}
+{% block page_title %}保持后台运行{% endblock %}
+{% block content %}
+<section class="result-card">
+  <div class="result-icon" aria-hidden="true">✓</div>
+  <p class="eyebrow">Background mode</p>
+  <h2>可以安全关闭这个网页</h2>
+  <p class="summary-copy">Web 服务仍在本机运行，端口不会释放。由网页管理或由其他终端启动的定时同步都会继续运行。</p>
+  <div class="notice neutral">稍后重新打开 <span class="monospace">{{ console_url }}</span> 即可继续使用。</div>
+  <div class="form-actions centered">
+    <a class="button primary" href="/console">返回控制台</a>
+  </div>
+</section>
+{% endblock %}

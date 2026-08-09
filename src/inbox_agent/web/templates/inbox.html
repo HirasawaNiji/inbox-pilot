@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}收件箱 · InboxPilot{% endblock %}
+{% block page_title %}收件箱分析{% endblock %}
+{% block content %}
+<section class="panel filter-panel">
+  <form class="filters" method="get" action="/console/inbox"
+        hx-get="/console/inbox/table" hx-target="#message-results" hx-push-url="true" hx-indicator="#filter-loading">
+    <label>优先级
+      <select name="priority">
+        <option value="">全部</option>
+        {% for item in ['P1', 'P2', 'P3', 'P4', 'P5'] %}
+          <option value="{{ item }}" {% if filters.priority and filters.priority.value == item %}selected{% endif %}>{{ item }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>类别
+      <input type="search" name="category" value="{{ filters.category or '' }}" placeholder="例如 academic_notice" maxlength="100">
+    </label>
+    <label>人工复核
+      <select name="review">
+        <option value="">全部</option>
+        <option value="yes" {% if review_filter == 'yes' %}selected{% endif %}>需要复核</option>
+        <option value="no" {% if review_filter == 'no' %}selected{% endif %}>无需复核</option>
+      </select>
+    </label>
+    <button class="button primary" type="submit">应用筛选</button>
+    <a class="button ghost" href="/console/inbox">清除</a>
+    <span id="filter-loading" class="htmx-indicator muted">正在读取…</span>
+  </form>
+</section>
+{% include "partials/message_table.html" %}
+{% endblock %}
