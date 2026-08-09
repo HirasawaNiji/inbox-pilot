@@ -21,6 +21,7 @@ from inbox_agent.workflow import WorkflowReport, WorkflowStatus
 Clock = Callable[[], datetime]
 WorkflowExecutor = Callable[[], WorkflowReport]
 ResultCallback = Callable[[ServiceRunResult], None]
+ResultProcessor = Callable[[ServiceRunResult], object]
 Waiter = Callable[[float], bool]
 
 
@@ -42,6 +43,7 @@ class ServiceRunner:
         database: Database,
         lock_path: Path,
         execute_workflow: WorkflowExecutor,
+        result_processor: ResultProcessor | None = None,
         clock: Clock = _utc_now,
         waiter: Waiter | None = None,
     ) -> None:
@@ -49,6 +51,7 @@ class ServiceRunner:
         self.database = database
         self.lock_path = Path(lock_path)
         self.execute_workflow = execute_workflow
+        self.result_processor = result_processor
         self.clock = clock
         self._stop_event = threading.Event()
         self.waiter = waiter or self._stop_event.wait
@@ -64,7 +67,9 @@ class ServiceRunner:
 
         try:
             with ActionFileLock(self.lock_path, timeout_seconds=0):
-                return self._execute_locked(scheduled=False)
+                result = self._execute_locked(scheduled=False)
+                self._process_result(result)
+                return result
         except ActionFileLockTimeoutError as error:
             raise ServiceAlreadyRunningError(
                 f"another InboxPilot service holds the lock: {self.lock_path}"
@@ -93,6 +98,7 @@ class ServiceRunner:
                         return ()
                 while not self._stop_event.is_set():
                     result = self._execute_locked(scheduled=True)
+                    self._process_result(result)
                     results.append(result)
                     if on_result is not None:
                         on_result(result)
@@ -108,6 +114,16 @@ class ServiceRunner:
             if lock_acquired:
                 self._mark_stopped()
         return tuple(results)
+
+    def _process_result(self, result: ServiceRunResult) -> None:
+        """Run optional post-workflow features without changing workflow outcome."""
+
+        if self.result_processor is None:
+            return
+        try:
+            self.result_processor(result)
+        except Exception:  # noqa: BLE001 - optional alerts cannot fail the scheduler
+            return
 
     def _execute_locked(self, *, scheduled: bool) -> ServiceRunResult:
         attempted_at = self.clock()

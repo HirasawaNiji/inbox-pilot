@@ -33,6 +33,8 @@ interval_minutes: 5
 max_backoff_minutes: 10
 run_immediately: false
 lock_path: private/service.lock
+notifications:
+  enabled: false
 workflow:
   dataset_path: messages.json
   database_path: private/service.sqlite3

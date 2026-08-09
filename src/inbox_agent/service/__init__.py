@@ -2,6 +2,7 @@
 
 from inbox_agent.service.config import (
     ServiceConfigurationError,
+    ServiceNotificationSettings,
     ServiceSettings,
     ServiceWorkflowSettings,
     load_service_settings,
@@ -18,6 +19,7 @@ from inbox_agent.service.status import inspect_service, service_is_active
 __all__ = [
     "ServiceAlreadyRunningError",
     "ServiceConfigurationError",
+    "ServiceNotificationSettings",
     "ServiceRunOutcome",
     "ServiceRunResult",
     "ServiceRunner",

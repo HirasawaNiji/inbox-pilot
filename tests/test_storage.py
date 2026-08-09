@@ -41,7 +41,7 @@ def test_upgrade_creates_versioned_schema_idempotently(tmp_path: Path) -> None:
 
     database = Database(path)
     try:
-        assert current_revision(database.engine) == "0003_service"
+        assert current_revision(database.engine) == "0004_notifications"
         assert storage_counts(database).messages == 0
     finally:
         database.dispose()
@@ -98,7 +98,7 @@ def test_workflow_migration_upgrades_existing_step_one_database(tmp_path: Path) 
 
     database = Database(path)
     try:
-        assert current_revision(database.engine) == "0003_service"
+        assert current_revision(database.engine) == "0004_notifications"
     finally:
         database.dispose()
     with sqlite3.connect(path) as connection:
@@ -120,7 +120,7 @@ def test_service_migration_upgrades_existing_workflow_database(tmp_path: Path) -
 
     database = Database(path)
     try:
-        assert current_revision(database.engine) == "0003_service"
+        assert current_revision(database.engine) == "0004_notifications"
         with database.engine.connect() as connection:
             columns = {
                 row[1] for row in connection.exec_driver_sql("PRAGMA table_info(service_states)")
@@ -132,6 +132,20 @@ def test_service_migration_upgrades_existing_workflow_database(tmp_path: Path) -
             "next_run_at",
             "consecutive_failures",
         } <= columns
+        with database.engine.connect() as connection:
+            notification_columns = {
+                row[1]
+                for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(notification_deliveries)"
+                )
+            }
+        assert {
+            "dedupe_key",
+            "kind",
+            "status",
+            "attempt_count",
+            "delivered_at",
+        } <= notification_columns
     finally:
         database.dispose()
 

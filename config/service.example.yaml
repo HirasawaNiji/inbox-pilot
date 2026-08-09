@@ -7,6 +7,21 @@ max_backoff_minutes: 60
 run_immediately: true
 lock_path: data/private/inbox_pilot.service.lock
 
+notifications:
+  # Native Windows toast notifications contain only a priority/count or a
+  # generic failure message. They never include the complete email body.
+  enabled: true
+  desktop_enabled: true
+
+  # Generate one private Markdown digest on the first run at or after 18:00.
+  daily_summary_enabled: true
+  output_dir: data/private/summaries
+  timezone: Asia/Shanghai
+  daily_summary_hour: 18
+  deadline_window_hours: 48
+  summary_lookback_hours: 24
+  retry_limit: 3
+
 workflow:
   dataset_path: data/samples/sample_emails.json
   database_path: data/private/service-test.sqlite3

@@ -82,6 +82,7 @@ from inbox_agent.llm import (
 from inbox_agent.loader import DatasetLoadError, load_dataset
 from inbox_agent.models import TriageResult
 from inbox_agent.normalizer import normalize_message
+from inbox_agent.notifications import NotificationCoordinator
 from inbox_agent.pipeline import AnalysisReport, OfflinePipeline, analyze_file
 from inbox_agent.rule_engine import RulePolicyError
 from inbox_agent.service import (
@@ -1190,11 +1191,18 @@ def _service_runner_from_config(
     runtime = settings.workflow.runtime_settings(PROJECT_ROOT)
     upgrade_database(runtime.database_path)
     database = Database(runtime.database_path)
+    notifications = NotificationCoordinator(
+        database=database,
+        action_queue_path=runtime.action_queue_path,
+        output_dir=settings.notifications.resolved_output_dir(PROJECT_ROOT),
+        settings=settings.notifications,
+    )
     runner = ServiceRunner(
         settings=settings,
         database=database,
         lock_path=settings.resolved_lock_path(PROJECT_ROOT),
         execute_workflow=lambda: execute_workflow(runtime),
+        result_processor=notifications.process,
     )
     return runner, database
 

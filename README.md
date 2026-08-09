@@ -24,7 +24,7 @@ LLM 和写回能力都必须由用户分别配置和授权。
 
 ## 项目状态
 
-**阶段一至阶段三已经全部完成；阶段四步骤一至五已经完成，下一步为通知和每日摘要。**
+**阶段一至阶段三已经全部完成；阶段四步骤一至六已经完成，下一步为可观测性与故障恢复。**
 
 2026-08-09，阶段三在个人 Outlook 真实环境已完成以下验收：
 
@@ -35,7 +35,7 @@ LLM 和写回能力都必须由用户分别配置和授权。
 - 每个动作均为一次 GET、最多一次 PATCH、零自动重试；
 - 用户分类得到保留，邮件位置、主题、正文和附件状态不变。
 
-同日，阶段四步骤一至五完成自动化与本地真实链路验收：
+同日，阶段四步骤一至六完成自动化与本地真实链路验收：
 
 - SQLite 迁移、JSON 幂等导入和旧版本数据库升级通过；
 - 统一工作流可持久化分析结果，第二次运行会跳过内容与配置均未变化的邮件；
@@ -46,8 +46,11 @@ LLM 和写回能力都必须由用户分别配置和授权。
 - 写回与回滚接口要求显式 Action ID 确认，并继续复用既有写前检查、锁、审计和幂等控制。
 - 本地 Web 控制台完成总览、P1～P5 筛选、解释详情、人工复核、动作确认和运行状态页面；
 - 控制台使用 CSRF 校验、零写入预览和二次确认保护审批、写回与受控回滚。
+- P1/P2、可靠截止事项和工作流故障接入 Windows 本地提醒，并使用 SQLite 指纹跨重启去重；
+- 每日摘要写入私有 Markdown 文件，包含优先事项、截止日期和人工处理计数，不包含完整邮件正文。
+- 2026-08-10 完成真实 Outlook 只读通知验收：重复同步零新增分析、零重复提醒、零 Graph 写请求。
 
-当前自动化质量基线为 422 项测试通过，覆盖率 83.42%，Ruff 和 mypy 通过。真实邮件、令牌、
+当前自动化质量基线为 427 项测试通过，覆盖率 83.65%，Ruff 和 mypy 通过。真实邮件、令牌、
 API Key、私有队列和审计日志均由 Git 忽略。
 
 | 阶段 | 结果 | 详细文档 |
@@ -56,7 +59,7 @@ API Key、私有队列和审计日志均由 Git 忽略。
 | 阶段二 | 结构化 LLM、路由融合与 Outlook 只读同步完成 | [LLM Provider](docs/llm_provider.md)、[Outlook 同步](docs/microsoft_graph_sync.md) |
 | 阶段 2.5 | 50 封样例与 DeepSeek 真实验证完成 | [DeepSeek 验证](docs/stage2_5_deepseek_validation.md) |
 | 阶段三 | 人工确认、分类写回、审计、对账、回滚及真实小批量验收完成 | [单动作 CLI](docs/stage3_single_action_cli.md)、[受控回滚](docs/stage3_rollback.md) |
-| 阶段四 | SQLite、统一增量工作流、单实例定时服务、本地 Web API 和 Web 控制台完成；通知待实现 | [SQLite 持久化](docs/stage4_sqlite_persistence.md)、[工作流编排](docs/stage4_workflow_orchestration.md)、[本地调度服务](docs/stage4_local_scheduler.md)、[FastAPI Web API](docs/stage4_fastapi_web_api.md)、[Web 控制台](docs/stage4_web_console.md) |
+| 阶段四 | SQLite、统一增量工作流、单实例定时服务、本地 Web API、Web 控制台、通知与每日摘要完成；可观测性待实现 | [SQLite 持久化](docs/stage4_sqlite_persistence.md)、[工作流编排](docs/stage4_workflow_orchestration.md)、[本地调度服务](docs/stage4_local_scheduler.md)、[FastAPI Web API](docs/stage4_fastapi_web_api.md)、[Web 控制台](docs/stage4_web_console.md)、[通知与摘要](docs/stage4_notifications.md) |
 
 阶段四开发步骤：
 
@@ -65,7 +68,8 @@ API Key、私有队列和审计日志均由 Git 忽略。
 - [x] 步骤三：单实例本地调度器、状态探测与失败退避；
 - [x] 步骤四：本地 FastAPI Web API；
 - [x] 步骤五：Jinja2 + HTMX 本地 Web 控制台；
-- [ ] 步骤六：本地通知与每日摘要（下一步）。
+- [x] 步骤六：本地通知与每日摘要；
+- [ ] 步骤七：可观测性与故障恢复（下一步）。
 
 ## 快速开始
 
@@ -148,6 +152,10 @@ uv run inbox-agent service status --config config/service.local.yaml
 
 长期运行使用 `service start`，按 `Ctrl+C` 优雅停止。配置和退避规则见
 [本地调度服务指南](docs/stage4_local_scheduler.md)。
+
+每次服务运行结束后会处理 P1/P2、可靠截止事项和工作流故障提醒，并在配置时间生成私有每日摘要。
+Windows Toast 默认不显示邮件主题或完整正文；摘要默认写入 `data/private/summaries/`。通知开关、
+时区、提醒窗口和跨重启去重说明见[本地通知与每日摘要](docs/stage4_notifications.md)。
 
 ### 5. 启动本地 Web API 与控制台（阶段四）
 
@@ -468,6 +476,7 @@ uv run inbox-agent evaluate
 - [阶段四本地调度服务](docs/stage4_local_scheduler.md)
 - [阶段四本地 FastAPI Web API](docs/stage4_fastapi_web_api.md)
 - [阶段四本地 Web 控制台](docs/stage4_web_console.md)
+- [阶段四本地通知与每日摘要](docs/stage4_notifications.md)
 
 ### 分类写回与安全
 

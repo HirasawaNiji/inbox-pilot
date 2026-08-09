@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from yaml import YAMLError
 
 from inbox_agent.models import FrozenModel
@@ -51,6 +52,34 @@ class ServiceWorkflowSettings(FrozenModel):
         ).resolved()
 
 
+class ServiceNotificationSettings(FrozenModel):
+    """Local alert, deadline reminder, and private digest policy."""
+
+    enabled: bool = True
+    desktop_enabled: bool = True
+    daily_summary_enabled: bool = True
+    output_dir: Path = Path("data/private/summaries")
+    timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=255)
+    daily_summary_hour: int = Field(default=18, ge=0, le=23)
+    deadline_window_hours: int = Field(default=48, ge=1, le=24 * 30)
+    summary_lookback_hours: int = Field(default=24, ge=1, le=24 * 30)
+    retry_limit: int = Field(default=3, ge=1, le=10)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError(f"unknown notification timezone: {value}") from error
+        return value
+
+    def resolved_output_dir(self, project_root: Path) -> Path:
+        if self.output_dir.is_absolute():
+            return self.output_dir.resolve()
+        return (project_root / self.output_dir).resolve()
+
+
 class ServiceSettings(FrozenModel):
     """Safe single-process scheduling and retry settings."""
 
@@ -65,6 +94,7 @@ class ServiceSettings(FrozenModel):
     run_immediately: bool = True
     lock_path: Path = Path("data/private/inbox_pilot.service.lock")
     workflow: ServiceWorkflowSettings = ServiceWorkflowSettings()
+    notifications: ServiceNotificationSettings = ServiceNotificationSettings()
 
     @model_validator(mode="after")
     def validate_backoff(self) -> Self:
