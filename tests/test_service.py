@@ -12,6 +12,7 @@ from inbox_agent.service import (
     ServiceAlreadyRunningError,
     ServiceRunner,
     ServiceRunOutcome,
+    ServiceRunResult,
     ServiceSettings,
     ServiceStatus,
     ServiceWorkflowSettings,
@@ -109,11 +110,13 @@ workflow:
 def test_run_once_persists_success_and_releases_process_identity(tmp_path: Path) -> None:
     settings = service_settings(tmp_path)
     database = migrated_database(settings, tmp_path)
+    processed: list[ServiceRunResult] = []
     runner = ServiceRunner(
         settings=settings,
         database=database,
         lock_path=settings.resolved_lock_path(tmp_path),
         execute_workflow=workflow_report,
+        result_processor=processed.append,
         clock=lambda: FIXED_TIME,
     )
     try:
@@ -129,6 +132,7 @@ def test_run_once_persists_success_and_releases_process_identity(tmp_path: Path)
         assert state.pid is None
         assert state.last_success_at == FIXED_TIME.isoformat()
         assert state.consecutive_failures == 0
+        assert processed == [result]
     finally:
         database.dispose()
 
@@ -243,7 +247,7 @@ def test_status_combines_live_lock_and_persisted_state(tmp_path: Path) -> None:
         assert inactive.active is False
         assert inactive.persisted_status is ServiceStatus.IDLE
         assert active.active is True
-        assert active.database_revision == "0003_service"
+        assert active.database_revision == "0004_notifications"
         assert active.needs_upgrade is False
     finally:
         database.dispose()

@@ -147,3 +147,22 @@ class ServiceStateRow(Base):
     consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class NotificationDeliveryRow(Base):
+    """Privacy-safe delivery ledger used for durable notification deduplication."""
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        Index("ix_notification_deliveries_status_kind", "status", "kind"),
+    )
+
+    dedupe_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    related_hash: Mapped[str | None] = mapped_column(String(64))
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    last_attempt_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    delivered_at: Mapped[str | None] = mapped_column(String(40))
+    error_summary: Mapped[str | None] = mapped_column(Text)

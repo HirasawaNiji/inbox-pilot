@@ -13,6 +13,7 @@ from inbox_agent.llm import (
     OpenAICompatibleSettings,
 )
 from inbox_agent.models import FrozenModel
+from inbox_agent.notifications import NotificationCoordinator
 from inbox_agent.service import (
     ServiceConfigurationError,
     ServiceRunner,
@@ -201,6 +202,14 @@ class WebAgentManager:
             provider = self._build_provider()
             upgrade_database(runtime.database_path)
             database = Database(runtime.database_path)
+            notifications = NotificationCoordinator(
+                database=database,
+                action_queue_path=runtime.action_queue_path,
+                output_dir=service_settings.notifications.resolved_output_dir(
+                    self.settings.project_root
+                ),
+                settings=service_settings.notifications,
+            )
             runner = ServiceRunner(
                 settings=service_settings.model_copy(update={"workflow": workflow_settings}),
                 database=database,
@@ -209,6 +218,7 @@ class WebAgentManager:
                     runtime,
                     llm_provider=provider,
                 ),
+                result_processor=notifications.process,
             )
             thread = Thread(
                 target=self._serve,

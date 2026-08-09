@@ -117,7 +117,7 @@ uv run inbox-agent db status --format json
 
 预期结果：
 
-- 当前 Revision 为 `0003_service`（旧数据库会由 Alembic 自动升级）；
+- 当前 Revision 为 `0004_notifications`（旧数据库会由 Alembic 自动升级）；
 - 第一次导入 `created` 为 50；
 - 第二次导入 `unchanged` 为 50；
 - 最终 `messages` 为 50；
