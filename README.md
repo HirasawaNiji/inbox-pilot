@@ -16,13 +16,15 @@ YAML 规则与可选的 OpenAI / DeepSeek 模型，为邮件生成 P1～P5 优�
 - 通过人工确认队列、dry-run、幂等键和写前冲突检查控制分类写回；
 - 只允许修改一封邮件的 `categories`，不移动、不删除、不发送、不改写邮件内容；
 - 对结果不确定的写入执行零 PATCH 对账，并支持保留用户分类的受控回滚；
+- 使用 SQLite 持久化邮件、分析、动作、同步游标、工作流和服务状态；
+- 通过统一增量工作流和单实例本地调度器持续同步与分析，跳过未变化邮件；
 - 提供 50 封匿名样例、离线评测、真实 LLM 验证和完整自动化测试。
 
 ## 项目状态
 
-**阶段一至阶段三已经全部完成。**
+**阶段一至阶段三已经全部完成；阶段四步骤一至三已经完成，下一步为本地 Web API。**
 
-2026-08-09，个人 Outlook 真实环境已完成以下验收：
+2026-08-09，阶段三在个人 Outlook 真实环境已完成以下验收：
 
 - 单封邮件分类写入；
 - 单封邮件真实受控回滚；
@@ -31,7 +33,15 @@ YAML 规则与可选的 OpenAI / DeepSeek 模型，为邮件生成 P1～P5 优�
 - 每个动作均为一次 GET、最多一次 PATCH、零自动重试；
 - 用户分类得到保留，邮件位置、主题、正文和附件状态不变。
 
-当前自动化质量基线为 373 项测试通过，Ruff 和 mypy 通过。真实邮件、令牌、API Key、私有队列
+同日，阶段四步骤一至三完成自动化与本地真实链路验收：
+
+- SQLite 迁移、JSON 幂等导入和旧版本数据库升级通过；
+- 统一工作流可持久化分析结果，第二次运行会跳过内容与配置均未变化的邮件；
+- 本地调度器完成单次运行、单实例锁、状态保存、失败退避和优雅停止验收；
+- 一封新到达的真实 Outlook 邮件被只读同步并生成 `P4 / general_notice` 待确认动作；
+- 自动工作流保持 Graph 写请求为 0；人工批准后，受控执行器成功写入对应 Outlook 分类。
+
+当前自动化质量基线为 398 项测试通过，Ruff 和 mypy 通过。真实邮件、令牌、API Key、私有队列
 和审计日志均由 Git 忽略。
 
 | 阶段 | 结果 | 详细文档 |
@@ -40,6 +50,14 @@ YAML 规则与可选的 OpenAI / DeepSeek 模型，为邮件生成 P1～P5 优�
 | 阶段二 | 结构化 LLM、路由融合与 Outlook 只读同步完成 | [LLM Provider](docs/llm_provider.md)、[Outlook 同步](docs/microsoft_graph_sync.md) |
 | 阶段 2.5 | 50 封样例与 DeepSeek 真实验证完成 | [DeepSeek 验证](docs/stage2_5_deepseek_validation.md) |
 | 阶段三 | 人工确认、分类写回、审计、对账、回滚及真实小批量验收完成 | [单动作 CLI](docs/stage3_single_action_cli.md)、[受控回滚](docs/stage3_rollback.md) |
+| 阶段四 | SQLite、统一增量工作流和单实例定时服务完成；Web API 待实现 | [SQLite 持久化](docs/stage4_sqlite_persistence.md)、[工作流编排](docs/stage4_workflow_orchestration.md)、[本地调度服务](docs/stage4_local_scheduler.md) |
+
+阶段四开发步骤：
+
+- [x] 步骤一：SQLite 持久化与 Alembic 迁移；
+- [x] 步骤二：同步、导入、增量分析和动作生成的统一工作流；
+- [x] 步骤三：单实例本地调度器、状态探测与失败退避；
+- [ ] 步骤四：本地 FastAPI Web API（下一步）。
 
 ## 快速开始
 
@@ -84,6 +102,44 @@ uv run inbox-agent analyze path/to/messages.json `
 输入必须符合 `MessageDataset` Schema。可从
 [data/samples/sample_emails.json](data/samples/sample_emails.json) 查看完整示例。规则字段、关键词、权重
 和阈值的修改方法见[规则配置指南](docs/rules_configuration.md)。
+
+### 4. 初始化本地数据库（阶段四）
+
+```powershell
+uv run inbox-agent db init
+uv run inbox-agent db import-json data/samples/sample_emails.json
+uv run inbox-agent db status
+```
+
+数据库默认写入 Git 忽略的 `data/private/inbox_pilot.sqlite3`。重复初始化和重复导入均安全，
+设计与验收方法见 [SQLite 持久化说明](docs/stage4_sqlite_persistence.md)。
+
+统一执行导入、增量分析和人工确认动作生成：
+
+```powershell
+uv run inbox-agent workflow run `
+  --dataset data/samples/sample_emails.json `
+  --database data/private/stage4-test.sqlite3 `
+  --queue data/private/stage4-test-actions.json `
+  --audit-log data/private/stage4-test-audit.jsonl
+
+uv run inbox-agent workflow status --database data/private/stage4-test.sqlite3
+```
+
+第二次运行会跳过内容与配置均未变化的邮件，且 Graph 写请求始终为 0。完整说明见
+[工作流编排指南](docs/stage4_workflow_orchestration.md)。公开样例使用独立测试路径，避免把样例动作
+混入真实 Outlook 人工确认队列。
+
+需要定时运行时，复制安全模板并先执行单次验收：
+
+```powershell
+Copy-Item config/service.example.yaml config/service.local.yaml
+uv run inbox-agent service run-once --config config/service.local.yaml
+uv run inbox-agent service status --config config/service.local.yaml
+```
+
+长期运行使用 `service start`，按 `Ctrl+C` 优雅停止。配置和退避规则见
+[本地调度服务指南](docs/stage4_local_scheduler.md)。
 
 ## 可选：接入 OpenAI 或 DeepSeek
 
@@ -252,6 +308,12 @@ uv run inbox-agent actions rollback-execute ACTION_ID `
 | `inbox-agent analyze DATASET` | 分析指定数据集 | 默认离线；配置 LLM 后调用 Provider |
 | `inbox-agent evaluate` | 与人工标签执行离线回归评测 | 完全离线 |
 | `inbox-agent validate-llm` | 验证真实 LLM Provider | 消耗 API Token |
+| `inbox-agent db init/status` | 初始化数据库或查看版本与计数 | 仅本地 SQLite |
+| `inbox-agent db import-json DATASET` | 幂等导入并标准化现有 JSON 邮件 | 仅本地 SQLite |
+| `inbox-agent workflow run` | 增量分析并生成待确认动作 | 默认离线；可选 Graph 只读和 LLM |
+| `inbox-agent workflow status` | 查看最近持久化运行状态 | 仅本地 SQLite |
+| `inbox-agent service run-once` | 使用服务配置执行一次锁定工作流 | 默认离线；可选 Graph 只读和 LLM |
+| `inbox-agent service start/status` | 启动定时服务或查看实际锁与状态 | 自动同步/分析，不自动写回 |
 | `inbox-agent outlook login` | 获取只读委托授权 | 登录，不修改邮件 |
 | `inbox-agent outlook sync` | 增量同步收件箱 | Graph 只读 |
 | `inbox-agent actions build/list/show` | 管理本地动作队列 | 仅本地文件 |
@@ -267,6 +329,9 @@ uv run inbox-agent actions rollback-execute ACTION_ID `
 uv run inbox-agent --help
 uv run inbox-agent actions --help
 uv run inbox-agent outlook --help
+uv run inbox-agent db --help
+uv run inbox-agent workflow --help
+uv run inbox-agent service --help
 ```
 
 ### CLI 退出码
@@ -288,6 +353,7 @@ uv run inbox-agent outlook --help
 | `config/llm_provider.example.yaml` | OpenAI / DeepSeek 本地配置模板 |
 | `config/graph.example.yaml` | Outlook 只读同步模板 |
 | `config/graph_write.example.yaml` | 默认关闭的独立写权限模板 |
+| `config/service.example.yaml` | 使用隔离测试路径的本地调度模板 |
 
 所有 `*.local.yaml`、API Key、令牌和私有邮件数据都不应提交到 Git。
 
@@ -302,6 +368,7 @@ uv run inbox-agent outlook --help
 - Graph 写入前重新读取分类与 `changeKey`；
 - 网络结果未知时禁止自动重试，只允许只读对账；
 - 审计日志不保存邮件正文、主题、原始 Message ID、令牌或 API Key；
+- SQLite 数据库默认位于 `data/private/`，不会提交到 Git；
 - 移动、删除、发送邮件和修改主题、正文始终不在允许范围。
 
 ## 项目结构
@@ -316,6 +383,9 @@ inbox-pilot/
 │   ├── actions/         # 人工确认、审计、执行、对账与回滚
 │   ├── graph/           # MSAL、Graph 同步和受限分类客户端
 │   ├── llm/             # Provider、Prompt、路由、融合与验证
+│   ├── storage/         # SQLite、SQLAlchemy Repository 与 Alembic 迁移
+│   ├── workflow/        # 增量编排、运行状态与失败隔离
+│   ├── service/         # 单实例定时运行、退避与状态探测
 │   ├── loader.py        # JSON 加载与 Schema 校验
 │   ├── normalizer.py    # HTML 与字段标准化
 │   ├── rule_engine.py   # YAML 可解释规则引擎
@@ -353,6 +423,9 @@ uv run inbox-agent evaluate
 - [LLM 路由](docs/llm_routing.md)
 - [规则与 LLM 融合](docs/llm_fusion.md)
 - [Microsoft Graph 只读同步](docs/microsoft_graph_sync.md)
+- [阶段四 SQLite 持久化](docs/stage4_sqlite_persistence.md)
+- [阶段四统一工作流编排](docs/stage4_workflow_orchestration.md)
+- [阶段四本地调度服务](docs/stage4_local_scheduler.md)
 
 ### 分类写回与安全
 
@@ -380,7 +453,7 @@ uv run inbox-agent evaluate
 - 目前主要面向中文高校邮件和个人 Outlook 收件箱；
 - 尚未验证组织租户策略、共享邮箱和其他邮件文件夹；
 - 50 封公开样例和当前真实验收不能代表所有邮箱的泛化效果；
-- 当前没有 Web UI、后台常驻服务或自动批量执行；
+- 当前没有 Web UI、操作系统开机自启或无人确认的自动批量写回；
 - 后续可增加 GitHub Actions、Web 演示和更大规模的匿名真实场景评测。
 
 ## License

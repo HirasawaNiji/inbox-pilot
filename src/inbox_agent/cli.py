@@ -9,9 +9,11 @@ from typing import Annotated
 
 import httpx
 import typer
+from alembic.util.exc import CommandError as AlembicCommandError
 from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
+from sqlalchemy.exc import SQLAlchemyError
 
 from inbox_agent.actions import (
     ActionActor,
@@ -79,8 +81,36 @@ from inbox_agent.llm import (
 )
 from inbox_agent.loader import DatasetLoadError, load_dataset
 from inbox_agent.models import TriageResult
+from inbox_agent.normalizer import normalize_message
 from inbox_agent.pipeline import AnalysisReport, OfflinePipeline, analyze_file
 from inbox_agent.rule_engine import RulePolicyError
+from inbox_agent.service import (
+    ServiceAlreadyRunningError,
+    ServiceConfigurationError,
+    ServiceRunner,
+    ServiceRunOutcome,
+    ServiceRunResult,
+    ServiceStatusReport,
+    inspect_service,
+    load_service_settings,
+)
+from inbox_agent.storage import (
+    Database,
+    MessageRepository,
+    UpsertOutcome,
+    WorkflowRunRepository,
+    current_revision,
+    head_revision,
+    storage_counts,
+    upgrade_database,
+)
+from inbox_agent.workflow import (
+    WorkflowExecutionError,
+    WorkflowReport,
+    WorkflowRuntimeSettings,
+    WorkflowStatus,
+    execute_workflow,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET_PATH = PROJECT_ROOT / "data" / "samples" / "sample_emails.json"
@@ -92,6 +122,8 @@ DEFAULT_GRAPH_PATH = PROJECT_ROOT / "config" / "graph.local.yaml"
 DEFAULT_GRAPH_WRITE_PATH = PROJECT_ROOT / "config" / "graph_write.local.yaml"
 DEFAULT_ACTION_QUEUE_PATH = PROJECT_ROOT / "data" / "private" / "action_queue.json"
 DEFAULT_ACTION_AUDIT_PATH = PROJECT_ROOT / "data" / "private" / "audit" / "actions.jsonl"
+DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "private" / "inbox_pilot.sqlite3"
+DEFAULT_SERVICE_PATH = PROJECT_ROOT / "config" / "service.local.yaml"
 
 
 class OutputFormat(StrEnum):
@@ -112,14 +144,261 @@ outlook_app = typer.Typer(
 actions_app = typer.Typer(
     help="Review local actions and run explicitly gated single-action Graph workflows."
 )
+database_app = typer.Typer(help="Initialize and inspect the private local SQLite database.")
+workflow_app = typer.Typer(
+    help="Run durable incremental analysis through the human-review boundary."
+)
+service_app = typer.Typer(
+    help="Run one single-instance local scheduler; Ctrl+C stops it gracefully."
+)
 app.add_typer(outlook_app, name="outlook")
 app.add_typer(actions_app, name="actions")
+app.add_typer(database_app, name="db")
+app.add_typer(workflow_app, name="workflow")
+app.add_typer(service_app, name="service")
 
 
 def _console() -> Console:
     """Create a console at invocation time so test runners can capture output."""
 
     return Console(highlight=False)
+
+
+def _database_status_payload(database_path: Path) -> dict[str, object]:
+    """Inspect a migrated database without exposing any stored message content."""
+
+    resolved = database_path.resolve()
+    latest_revision = head_revision(resolved)
+    if not resolved.is_file():
+        return {
+            "database_path": str(resolved),
+            "initialized": False,
+            "revision": None,
+            "head_revision": latest_revision,
+            "needs_upgrade": False,
+            "counts": {
+                "messages": 0,
+                "analyses": 0,
+                "actions": 0,
+                "sync_cursors": 0,
+                "workflow_runs": 0,
+            },
+        }
+
+    database = Database(resolved)
+    try:
+        revision = current_revision(database.engine)
+        counts = storage_counts(database) if revision is not None else None
+    finally:
+        database.dispose()
+    return {
+        "database_path": str(resolved),
+        "initialized": revision is not None,
+        "revision": revision,
+        "head_revision": latest_revision,
+        "needs_upgrade": revision is not None and revision != latest_revision,
+        "counts": (
+            {
+                "messages": counts.messages,
+                "analyses": counts.analyses,
+                "actions": counts.actions,
+                "sync_cursors": counts.sync_cursors,
+                "workflow_runs": counts.workflow_runs,
+            }
+            if counts is not None
+            else {
+                "messages": 0,
+                "analyses": 0,
+                "actions": 0,
+                "sync_cursors": 0,
+                "workflow_runs": 0,
+            }
+        ),
+    }
+
+
+def _render_database_status(payload: dict[str, object], output_format: OutputFormat) -> None:
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    counts = payload["counts"]
+    assert isinstance(counts, dict)
+    table = Table(title="InboxPilot Database")
+    table.add_column("字段")
+    table.add_column("结果")
+    table.add_row("路径", str(payload["database_path"]))
+    table.add_row("已初始化", "yes" if payload["initialized"] else "no")
+    table.add_row("Revision", str(payload["revision"] or "-"))
+    table.add_row("最新 Revision", str(payload["head_revision"] or "-"))
+    table.add_row("需要升级", "yes" if payload["needs_upgrade"] else "no")
+    table.add_row("邮件", str(counts["messages"]))
+    table.add_row("分析结果", str(counts["analyses"]))
+    table.add_row("人工动作", str(counts["actions"]))
+    table.add_row("同步游标", str(counts["sync_cursors"]))
+    table.add_row("工作流运行", str(counts["workflow_runs"]))
+    _console().print(table)
+
+
+def _render_database_import(payload: dict[str, object], output_format: OutputFormat) -> None:
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    table = Table(title="InboxPilot JSON Import")
+    table.add_column("字段")
+    table.add_column("结果", justify="right")
+    table.add_row("数据集", str(payload["dataset_path"]))
+    table.add_row("数据库", str(payload["database_path"]))
+    table.add_row("新增", str(payload["created"]))
+    table.add_row("更新", str(payload["updated"]))
+    table.add_row("未变化", str(payload["unchanged"]))
+    table.add_row("标准化", str(payload["normalized"]))
+    _console().print(table)
+
+
+def _render_workflow_report(report: WorkflowReport, output_format: OutputFormat) -> None:
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        return
+
+    table = Table(title="InboxPilot Workflow")
+    table.add_column("指标")
+    table.add_column("结果", justify="right")
+    table.add_row("Run ID", report.run_id)
+    table.add_row("状态", report.status.value)
+    table.add_row("邮件总数", str(report.total_messages))
+    table.add_row("新增/更新", f"{report.imported_created}/{report.imported_updated}")
+    table.add_row("无需分析", str(report.skipped_current))
+    table.add_row("本次分析", str(report.analyzed_messages))
+    table.add_row("分析失败", str(len(report.analysis_failures)))
+    table.add_row("LLM 失败", str(len(report.llm_failures)))
+    table.add_row("新增动作", str(report.actions_added))
+    table.add_row("Graph 写请求", str(report.graph_write_request_count))
+    _console().print(table)
+    _console().print(f"数据库：[bold]{report.database_path}[/bold]")
+
+
+def _workflow_status_payload(database_path: Path) -> dict[str, object]:
+    resolved = database_path.resolve()
+    latest_revision = head_revision(resolved)
+    if not resolved.is_file():
+        return {
+            "database_path": str(resolved),
+            "initialized": False,
+            "revision": None,
+            "head_revision": latest_revision,
+            "needs_upgrade": False,
+            "latest_run": None,
+        }
+    database = Database(resolved)
+    try:
+        revision = current_revision(database.engine)
+        latest = (
+            WorkflowRunRepository(database).latest()
+            if revision is not None and revision == latest_revision
+            else None
+        )
+    finally:
+        database.dispose()
+    latest_payload = (
+        {
+            "run_id": latest.run_id,
+            "status": latest.status,
+            "current_step": latest.current_step,
+            "started_at": latest.started_at,
+            "finished_at": latest.finished_at,
+            "counters": latest.counters,
+            "steps": latest.steps,
+            "error_summary": latest.error_summary,
+        }
+        if latest is not None
+        else None
+    )
+    return {
+        "database_path": str(resolved),
+        "initialized": revision is not None,
+        "revision": revision,
+        "head_revision": latest_revision,
+        "needs_upgrade": revision is not None and revision != latest_revision,
+        "latest_run": latest_payload,
+    }
+
+
+def _render_workflow_status(payload: dict[str, object], output_format: OutputFormat) -> None:
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    latest = payload["latest_run"]
+    table = Table(title="InboxPilot Workflow Status")
+    table.add_column("字段")
+    table.add_column("结果")
+    table.add_row("数据库", str(payload["database_path"]))
+    table.add_row("已初始化", "yes" if payload["initialized"] else "no")
+    table.add_row("Revision", str(payload["revision"] or "-"))
+    table.add_row("需要升级", "yes" if payload["needs_upgrade"] else "no")
+    if isinstance(latest, dict):
+        table.add_row("Run ID", str(latest["run_id"]))
+        table.add_row("状态", str(latest["status"]))
+        table.add_row("当前步骤", str(latest["current_step"] or "-"))
+        table.add_row("开始", str(latest["started_at"]))
+        table.add_row("结束", str(latest["finished_at"] or "-"))
+    else:
+        table.add_row("最近运行", "-")
+    _console().print(table)
+
+
+def _render_service_run(result: ServiceRunResult, output_format: OutputFormat) -> None:
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        return
+    table = Table(title="InboxPilot Service Run")
+    table.add_column("指标")
+    table.add_column("结果", justify="right")
+    table.add_row("服务", result.service_name)
+    table.add_row("结果", result.outcome.value)
+    table.add_row(
+        "Run ID",
+        result.workflow_report.run_id if result.workflow_report is not None else "-",
+    )
+    table.add_row("连续失败", str(result.consecutive_failures))
+    table.add_row("下次等待", f"{result.delay_seconds}s")
+    table.add_row(
+        "Graph 写请求",
+        str(
+            result.workflow_report.graph_write_request_count
+            if result.workflow_report is not None
+            else 0
+        ),
+    )
+    if result.error_message is not None:
+        table.add_row("错误", result.error_message)
+    _console().print(table)
+
+
+def _render_service_status(report: ServiceStatusReport, output_format: OutputFormat) -> None:
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        return
+    table = Table(title="InboxPilot Service Status")
+    table.add_column("字段")
+    table.add_column("结果")
+    table.add_row("服务", report.service_name)
+    table.add_row("OS 锁活动", "yes" if report.active else "no")
+    table.add_row("持久化状态", report.persisted_status.value if report.persisted_status else "-")
+    table.add_row("PID", str(report.pid or "-"))
+    table.add_row("Revision", report.database_revision or "-")
+    table.add_row("需要升级", "yes" if report.needs_upgrade else "no")
+    table.add_row("上次运行", report.last_run_at.isoformat() if report.last_run_at else "-")
+    table.add_row(
+        "上次成功",
+        report.last_success_at.isoformat() if report.last_success_at else "-",
+    )
+    table.add_row("连续失败", str(report.consecutive_failures))
+    table.add_row("下次运行", report.next_run_at.isoformat() if report.next_run_at else "-")
+    if report.last_error is not None:
+        table.add_row("最近错误", report.last_error)
+    _console().print(table)
 
 
 def _deadline_text(report_result: TriageResult) -> str:
@@ -671,6 +950,355 @@ def main(context: typer.Context) -> None:
 
     if context.invoked_subcommand is None:
         typer.echo(context.get_help())
+
+
+@database_app.command("init")
+def database_init(
+    database_path: Annotated[
+        Path,
+        typer.Option(
+            "--database",
+            help="Private SQLite path. The default lives under Git-ignored data/private/.",
+        ),
+    ] = DEFAULT_DATABASE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Create or upgrade the private SQLite database to the latest schema."""
+
+    try:
+        upgrade_database(database_path)
+        payload = _database_status_payload(database_path)
+    except (AlembicCommandError, OSError, SQLAlchemyError) as error:
+        typer.echo(f"Error: database initialization failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    _render_database_status(payload, output_format)
+
+
+@database_app.command("status")
+def database_status(
+    database_path: Annotated[
+        Path,
+        typer.Option(
+            "--database",
+            help="Private SQLite path. This command never creates a missing database.",
+        ),
+    ] = DEFAULT_DATABASE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Show schema revision and record counts without reading private payloads."""
+
+    try:
+        payload = _database_status_payload(database_path)
+    except (OSError, SQLAlchemyError) as error:
+        typer.echo(f"Error: database inspection failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    _render_database_status(payload, output_format)
+
+
+@database_app.command("import-json")
+def database_import_json(
+    dataset_path: Annotated[
+        Path,
+        typer.Argument(help="Existing InboxPilot JSON dataset to import."),
+    ],
+    database_path: Annotated[
+        Path,
+        typer.Option(
+            "--database",
+            help="Private SQLite path. The schema is upgraded before import.",
+        ),
+    ] = DEFAULT_DATABASE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Idempotently import and normalize messages from the existing JSON format."""
+
+    database: Database | None = None
+    try:
+        dataset = load_dataset(dataset_path)
+        upgrade_database(database_path)
+        database = Database(database_path)
+        repository = MessageRepository(database)
+        created = 0
+        updated = 0
+        unchanged = 0
+        normalized = 0
+        for message in dataset.messages:
+            result = repository.upsert(message)
+            if result.outcome is UpsertOutcome.CREATED:
+                created += 1
+            elif result.outcome is UpsertOutcome.UPDATED:
+                updated += 1
+            else:
+                unchanged += 1
+            repository.save_normalized(normalize_message(message))
+            normalized += 1
+        payload: dict[str, object] = {
+            "dataset_path": str(dataset_path.resolve()),
+            "database_path": str(database_path.resolve()),
+            "created": created,
+            "updated": updated,
+            "unchanged": unchanged,
+            "normalized": normalized,
+        }
+    except (AlembicCommandError, DatasetLoadError, OSError, SQLAlchemyError) as error:
+        typer.echo(f"Error: JSON import failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    finally:
+        if database is not None:
+            database.dispose()
+    _render_database_import(payload, output_format)
+
+
+@workflow_app.command("run")
+def workflow_run(
+    dataset_path: Annotated[
+        Path,
+        typer.Option("--dataset", "-d", help="JSON dataset used when Outlook sync is disabled."),
+    ] = DEFAULT_DATASET_PATH,
+    database_path: Annotated[
+        Path,
+        typer.Option("--database", help="Private SQLite workflow database."),
+    ] = DEFAULT_DATABASE_PATH,
+    queue_path: Annotated[
+        Path,
+        typer.Option("--queue", help="Private human-review action queue."),
+    ] = DEFAULT_ACTION_QUEUE_PATH,
+    audit_path: Annotated[
+        Path,
+        typer.Option("--audit-log", help="Private append-only action audit log."),
+    ] = DEFAULT_ACTION_AUDIT_PATH,
+    policy_path: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Deterministic YAML rule policy."),
+    ] = DEFAULT_POLICY_PATH,
+    llm_config_path: Annotated[
+        Path | None,
+        typer.Option("--llm-config", help="Optional local OpenAI/DeepSeek provider YAML."),
+    ] = None,
+    llm_routing_path: Annotated[
+        Path,
+        typer.Option("--llm-routing-config", help="LLM routing policy."),
+    ] = DEFAULT_LLM_ROUTING_PATH,
+    llm_fusion_path: Annotated[
+        Path,
+        typer.Option("--llm-fusion-config", help="Rule/LLM fusion policy."),
+    ] = DEFAULT_LLM_FUSION_PATH,
+    sync_outlook: Annotated[
+        bool,
+        typer.Option(
+            "--sync-outlook",
+            help="Run one read-only Outlook delta sync before analysis.",
+        ),
+    ] = False,
+    graph_config_path: Annotated[
+        Path,
+        typer.Option("--graph-config", help="Private read-only Graph configuration."),
+    ] = DEFAULT_GRAPH_PATH,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Reanalyze even when content and configuration are current."),
+    ] = False,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Synchronize optionally, analyze incrementally, and build review-only actions."""
+
+    try:
+        report = execute_workflow(
+            WorkflowRuntimeSettings(
+                project_root=PROJECT_ROOT,
+                dataset_path=dataset_path,
+                database_path=database_path,
+                action_queue_path=queue_path,
+                audit_log_path=audit_path,
+                policy_path=policy_path,
+                llm_config_path=llm_config_path,
+                llm_routing_path=llm_routing_path,
+                llm_fusion_path=llm_fusion_path,
+                sync_outlook=sync_outlook,
+                graph_config_path=graph_config_path,
+            ),
+            force=force,
+        )
+    except (
+        AlembicCommandError,
+        GraphSettingsError,
+        LLMProviderConfigurationError,
+        LLMRoutingPolicyError,
+        LLMFusionPolicyError,
+        OSError,
+        RulePolicyError,
+        SQLAlchemyError,
+        WorkflowExecutionError,
+    ) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    _render_workflow_report(report, output_format)
+    if report.status is WorkflowStatus.COMPLETED_WITH_FAILURES:
+        raise typer.Exit(code=2)
+
+
+@workflow_app.command("status")
+def workflow_status(
+    database_path: Annotated[
+        Path,
+        typer.Option("--database", help="Private SQLite workflow database."),
+    ] = DEFAULT_DATABASE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Show the latest durable workflow run without reading email payloads."""
+
+    try:
+        payload = _workflow_status_payload(database_path)
+    except (OSError, SQLAlchemyError) as error:
+        typer.echo(f"Error: workflow status failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    _render_workflow_status(payload, output_format)
+
+
+def _service_runner_from_config(
+    config_path: Path,
+) -> tuple[ServiceRunner, Database]:
+    settings = load_service_settings(config_path)
+    runtime = settings.workflow.runtime_settings(PROJECT_ROOT)
+    upgrade_database(runtime.database_path)
+    database = Database(runtime.database_path)
+    runner = ServiceRunner(
+        settings=settings,
+        database=database,
+        lock_path=settings.resolved_lock_path(PROJECT_ROOT),
+        execute_workflow=lambda: execute_workflow(runtime),
+    )
+    return runner, database
+
+
+@service_app.command("run-once")
+def service_run_once(
+    config_path: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Private local scheduler YAML."),
+    ] = DEFAULT_SERVICE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Run one locked workflow attempt and return without scheduling another."""
+
+    database: Database | None = None
+    try:
+        runner, database = _service_runner_from_config(config_path)
+        result = runner.run_once()
+    except (
+        AlembicCommandError,
+        OSError,
+        SQLAlchemyError,
+        ServiceAlreadyRunningError,
+        ServiceConfigurationError,
+    ) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    finally:
+        if database is not None:
+            database.dispose()
+    _render_service_run(result, output_format)
+    if result.outcome is ServiceRunOutcome.FAILED:
+        raise typer.Exit(code=1)
+    if result.outcome is ServiceRunOutcome.COMPLETED_WITH_FAILURES:
+        raise typer.Exit(code=2)
+
+
+@service_app.command("start")
+def service_start(
+    config_path: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Private local scheduler YAML."),
+    ] = DEFAULT_SERVICE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format for each completed attempt."),
+    ] = OutputFormat.TABLE,
+    max_runs: Annotated[
+        int | None,
+        typer.Option(
+            "--max-runs",
+            min=1,
+            help="Stop after N attempts; useful for controlled acceptance tests.",
+        ),
+    ] = None,
+) -> None:
+    """Run a foreground scheduler until Ctrl+C, preserving durable status."""
+
+    database: Database | None = None
+    try:
+        runner, database = _service_runner_from_config(config_path)
+        typer.echo(
+            f"InboxPilot service started; Ctrl+C to stop; config={config_path}",
+            err=True,
+        )
+        results = runner.serve(
+            on_result=lambda result: _render_service_run(result, output_format),
+            max_runs=max_runs,
+        )
+    except KeyboardInterrupt:
+        typer.echo("InboxPilot service stopped gracefully.", err=True)
+        return
+    except (
+        AlembicCommandError,
+        OSError,
+        SQLAlchemyError,
+        ServiceAlreadyRunningError,
+        ServiceConfigurationError,
+    ) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    finally:
+        if database is not None:
+            database.dispose()
+    if any(result.outcome is ServiceRunOutcome.FAILED for result in results):
+        raise typer.Exit(code=1)
+    if any(result.outcome is ServiceRunOutcome.COMPLETED_WITH_FAILURES for result in results):
+        raise typer.Exit(code=2)
+
+
+@service_app.command("status")
+def service_status(
+    config_path: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Private local scheduler YAML."),
+    ] = DEFAULT_SERVICE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Inspect OS-lock liveness and persisted state without starting the service."""
+
+    try:
+        settings = load_service_settings(config_path)
+        report = inspect_service(
+            settings,
+            config_path=config_path,
+            project_root=PROJECT_ROOT,
+        )
+    except (OSError, SQLAlchemyError, ServiceConfigurationError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    _render_service_status(report, output_format)
 
 
 @app.command()
