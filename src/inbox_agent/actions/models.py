@@ -38,6 +38,10 @@ class MailboxActionStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     OUTCOME_UNKNOWN = "outcome_unknown"
+    ROLLBACK_EXECUTING = "rollback_executing"
+    ROLLBACK_WRITE_IN_FLIGHT = "rollback_write_in_flight"
+    ROLLBACK_FAILED = "rollback_failed"
+    ROLLBACK_OUTCOME_UNKNOWN = "rollback_outcome_unknown"
     ROLLED_BACK = "rolled_back"
 
 
@@ -93,12 +97,30 @@ _ALLOWED_TRANSITIONS: dict[MailboxActionStatus, frozenset[MailboxActionStatus]] 
             MailboxActionStatus.OUTCOME_UNKNOWN,
         }
     ),
-    MailboxActionStatus.SUCCEEDED: frozenset({MailboxActionStatus.ROLLED_BACK}),
+    MailboxActionStatus.SUCCEEDED: frozenset({MailboxActionStatus.ROLLBACK_EXECUTING}),
     MailboxActionStatus.FAILED: frozenset(
         {MailboxActionStatus.EXECUTING, MailboxActionStatus.REJECTED}
     ),
     MailboxActionStatus.OUTCOME_UNKNOWN: frozenset(
         {MailboxActionStatus.SUCCEEDED, MailboxActionStatus.FAILED}
+    ),
+    MailboxActionStatus.ROLLBACK_EXECUTING: frozenset(
+        {
+            MailboxActionStatus.ROLLED_BACK,
+            MailboxActionStatus.ROLLBACK_FAILED,
+            MailboxActionStatus.ROLLBACK_WRITE_IN_FLIGHT,
+        }
+    ),
+    MailboxActionStatus.ROLLBACK_WRITE_IN_FLIGHT: frozenset(
+        {
+            MailboxActionStatus.ROLLED_BACK,
+            MailboxActionStatus.ROLLBACK_FAILED,
+            MailboxActionStatus.ROLLBACK_OUTCOME_UNKNOWN,
+        }
+    ),
+    MailboxActionStatus.ROLLBACK_FAILED: frozenset({MailboxActionStatus.ROLLBACK_EXECUTING}),
+    MailboxActionStatus.ROLLBACK_OUTCOME_UNKNOWN: frozenset(
+        {MailboxActionStatus.ROLLED_BACK, MailboxActionStatus.ROLLBACK_FAILED}
     ),
     MailboxActionStatus.ROLLED_BACK: frozenset(),
 }
@@ -178,6 +200,46 @@ class CategoryWritePlan(FrozenModel):
         return normalized
 
 
+class RollbackExecutionSnapshot(FrozenModel):
+    """Live states persisted immediately before a controlled rollback PATCH."""
+
+    rollback_idempotency_key: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reason: str = Field(min_length=1, max_length=1_000)
+    observed_categories: tuple[str, ...] = Field(max_length=103)
+    target_categories: tuple[str, ...] = Field(max_length=103)
+    observed_change_key: str = Field(min_length=1, max_length=512)
+    observed_at: datetime
+
+    @field_validator("observed_categories", "target_categories")
+    @classmethod
+    def validate_categories(cls, categories: tuple[str, ...]) -> tuple[str, ...]:
+        return _normalize_categories(categories)
+
+    @field_validator("observed_at")
+    @classmethod
+    def validate_observed_at(cls, value: datetime) -> datetime:
+        return _require_aware(value, "rollback snapshot timestamp")
+
+    @model_validator(mode="after")
+    def validate_unmanaged_preservation(self) -> Self:
+        """Ensure the rollback changes only the InboxPilot-managed namespace."""
+
+        prefix = MANAGED_CATEGORY_PREFIX.casefold()
+        observed = {
+            category.casefold()
+            for category in self.observed_categories
+            if not category.casefold().startswith(prefix)
+        }
+        target = {
+            category.casefold()
+            for category in self.target_categories
+            if not category.casefold().startswith(prefix)
+        }
+        if observed != target:
+            raise ValueError("rollback snapshot must preserve all live unmanaged categories")
+        return self
+
+
 class ActionEvidence(FrozenModel):
     """Rule, LLM, and final triage evidence supporting an action proposal."""
 
@@ -235,6 +297,8 @@ class ActionTransition(FrozenModel):
         if self.to_status in {
             MailboxActionStatus.FAILED,
             MailboxActionStatus.OUTCOME_UNKNOWN,
+            MailboxActionStatus.ROLLBACK_FAILED,
+            MailboxActionStatus.ROLLBACK_OUTCOME_UNKNOWN,
             MailboxActionStatus.ROLLED_BACK,
         }:
             if self.note is None:
@@ -264,6 +328,7 @@ class MailboxAction(FrozenModel):
     transition_history: tuple[ActionTransition, ...] = Field(default=(), max_length=100)
 
     idempotency_key: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    rollback_snapshot: RollbackExecutionSnapshot | None = None
 
     @field_validator("created_at", "updated_at")
     @classmethod
@@ -303,6 +368,28 @@ class MailboxAction(FrozenModel):
             )
             if self.idempotency_key != expected_key:
                 raise ValueError("idempotency_key does not match the mailbox mutation")
+
+        rollback_snapshot_required = {
+            MailboxActionStatus.ROLLBACK_WRITE_IN_FLIGHT,
+            MailboxActionStatus.ROLLBACK_OUTCOME_UNKNOWN,
+            MailboxActionStatus.ROLLED_BACK,
+        }
+        if self.status in rollback_snapshot_required and self.rollback_snapshot is None:
+            raise ValueError("rollback state requires a persisted live snapshot")
+        if self.rollback_snapshot is not None:
+            prefix = MANAGED_CATEGORY_PREFIX.casefold()
+            original_managed = {
+                category.casefold()
+                for category in self.current_snapshot.categories
+                if category.casefold().startswith(prefix)
+            }
+            target_managed = {
+                category.casefold()
+                for category in self.rollback_snapshot.target_categories
+                if category.casefold().startswith(prefix)
+            }
+            if target_managed != original_managed:
+                raise ValueError("rollback target must restore the original managed categories")
 
         self._validate_transition_history()
         return self

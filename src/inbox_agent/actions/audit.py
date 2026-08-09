@@ -40,13 +40,17 @@ class AuditGraphOperation(StrEnum):
 
     EXECUTE = "execute"
     RECONCILE = "reconcile"
+    ROLLBACK = "rollback"
+    ROLLBACK_RECONCILE = "rollback_reconcile"
 
 
 class AuditGraphOutcome(StrEnum):
     """Privacy-safe Graph execution and reconciliation outcomes."""
 
     ALREADY_SUCCEEDED = "already_succeeded"
+    ALREADY_ROLLED_BACK = "already_rolled_back"
     SUCCEEDED = "succeeded"
+    ROLLED_BACK = "rolled_back"
     NO_CHANGE = "no_change"
     CONFLICT = "conflict"
     FAILED = "failed"

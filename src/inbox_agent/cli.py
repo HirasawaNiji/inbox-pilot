@@ -29,12 +29,18 @@ from inbox_agent.actions import (
     ActionReconciliationOutcome,
     ActionReconciliationReport,
     ApprovedActionGraphExecutor,
+    ControlledRollbackExecutor,
     DryRunReport,
     MailboxAction,
     MailboxActionStatus,
     RollbackDryRunReport,
+    RollbackExecutionOutcome,
+    RollbackExecutionReport,
     RollbackPlanError,
+    RollbackReconciliationOutcome,
+    RollbackReconciliationReport,
     UncertainActionReconciler,
+    UncertainRollbackReconciler,
     audit_event_for_rollback_dry_run,
     audit_events_for_action,
     audit_events_for_dry_run,
@@ -573,6 +579,49 @@ def _render_action_reconciliation(
     _console().print(table)
 
 
+def _render_rollback_execution(
+    report: RollbackExecutionReport,
+    output_format: OutputFormat,
+) -> None:
+    """Render a real controlled rollback without exposing mailbox content."""
+
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        return
+    table = Table(title="InboxPilot Controlled Rollback Execution")
+    table.add_column("Field")
+    table.add_column("Result", overflow="fold")
+    table.add_row("Action ID", report.action_id)
+    table.add_row("Outcome", report.outcome.value)
+    table.add_row("Final status", report.final_status.value)
+    table.add_row("Attempt", str(report.attempt_number))
+    table.add_row("Graph reads", str(report.graph_read_request_count))
+    table.add_row("Graph writes", str(report.graph_write_request_count))
+    table.add_row("Reason", report.reason or "-")
+    _console().print(table)
+
+
+def _render_rollback_reconciliation(
+    report: RollbackReconciliationReport,
+    output_format: OutputFormat,
+) -> None:
+    """Render the zero-write reconciliation of an uncertain rollback."""
+
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        return
+    table = Table(title="InboxPilot Rollback Reconciliation")
+    table.add_column("Field")
+    table.add_column("Result", overflow="fold")
+    table.add_row("Action ID", report.action_id)
+    table.add_row("Outcome", report.outcome.value)
+    table.add_row("Final status", report.final_status.value)
+    table.add_row("Graph reads", str(report.graph_read_request_count))
+    table.add_row("Graph writes", str(report.graph_write_request_count))
+    table.add_row("Reason", report.reason)
+    _console().print(table)
+
+
 def _run(
     dataset_path: Path,
     policy_path: Path,
@@ -1011,6 +1060,144 @@ def actions_rollback(
             f"去重 [bold]{audit_update.skipped_count}[/bold] · "
             f"日志 [bold]{audit_update.log_path}[/bold]"
         )
+
+
+@actions_app.command("rollback-execute")
+def actions_rollback_execute(
+    action_id: Annotated[str, typer.Argument(help="One succeeded action ID to roll back.")],
+    reason: Annotated[str, typer.Option("--reason", help="Required human rollback reason.")],
+    rollback_idempotency_key: Annotated[
+        str,
+        typer.Option(
+            "--rollback-idempotency-key",
+            help="Exact key produced by actions rollback --dry-run.",
+        ),
+    ],
+    confirm_action: Annotated[
+        str | None,
+        typer.Option("--confirm-action", help="Repeat the exact action ID to confirm rollback."),
+    ] = None,
+    queue_path: Annotated[
+        Path,
+        typer.Option("--queue", help="Path to the private action queue JSON file."),
+    ] = DEFAULT_ACTION_QUEUE_PATH,
+    audit_path: Annotated[
+        Path,
+        typer.Option("--audit-log", help="Path to the private append-only audit JSONL file."),
+    ] = DEFAULT_ACTION_AUDIT_PATH,
+    graph_config_path: Annotated[
+        Path,
+        typer.Option("--graph-config", help="Private Graph write-authorization YAML file."),
+    ] = DEFAULT_GRAPH_WRITE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Restore one action's original InboxPilot categories after confirmation."""
+
+    if confirm_action != action_id:
+        typer.echo(
+            "Error: rollback confirmation denied; pass --confirm-action with the exact "
+            f"action ID ({action_id}). No Graph request was sent.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        settings = load_graph_write_settings(graph_config_path)
+        settings.require_enabled()
+        provider = GraphTokenProvider.from_settings(settings, PROJECT_ROOT)
+        token = provider.acquire_silent()
+        repository = ActionQueueRepository(queue_path)
+        audit_log = ActionAuditLog(audit_path)
+        with httpx.Client() as http_client:
+            report = ControlledRollbackExecutor(
+                repository,
+                GraphCategoryWriteClient(settings, http_client),
+                audit_log,
+            ).execute(action_id, rollback_idempotency_key, reason, token)
+    except (
+        GraphSettingsError,
+        GraphWriteDisabledError,
+        GraphAuthenticationError,
+        GraphRequestError,
+        ActionQueueStorageError,
+        ActionAuditStorageError,
+        ActionExecutionGuardError,
+        ActionExecutionPersistenceError,
+        ActionExecutionAuditError,
+        ValidationError,
+    ) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    _render_rollback_execution(report, output_format)
+    if report.outcome in {
+        RollbackExecutionOutcome.CONFLICT,
+        RollbackExecutionOutcome.FAILED,
+        RollbackExecutionOutcome.OUTCOME_UNKNOWN,
+    }:
+        raise typer.Exit(code=2)
+
+
+@actions_app.command("rollback-reconcile")
+def actions_rollback_reconcile(
+    action_id: Annotated[str, typer.Argument(help="One uncertain rollback action ID.")],
+    rollback_idempotency_key: Annotated[
+        str,
+        typer.Option("--rollback-idempotency-key", help="Exact rollback idempotency key."),
+    ],
+    queue_path: Annotated[
+        Path,
+        typer.Option("--queue", help="Path to the private action queue JSON file."),
+    ] = DEFAULT_ACTION_QUEUE_PATH,
+    audit_path: Annotated[
+        Path,
+        typer.Option("--audit-log", help="Path to the private append-only audit JSONL file."),
+    ] = DEFAULT_ACTION_AUDIT_PATH,
+    graph_config_path: Annotated[
+        Path,
+        typer.Option("--graph-config", help="Private Graph write-authorization YAML file."),
+    ] = DEFAULT_GRAPH_WRITE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Resolve an uncertain rollback with one GET and zero PATCH requests."""
+
+    try:
+        settings = load_graph_write_settings(graph_config_path)
+        settings.require_enabled()
+        provider = GraphTokenProvider.from_settings(settings, PROJECT_ROOT)
+        token = provider.acquire_silent()
+        repository = ActionQueueRepository(queue_path)
+        audit_log = ActionAuditLog(audit_path)
+        with httpx.Client() as http_client:
+            report = UncertainRollbackReconciler(
+                repository,
+                GraphCategoryWriteClient(settings, http_client),
+                audit_log,
+            ).reconcile(action_id, rollback_idempotency_key, token)
+    except (
+        GraphSettingsError,
+        GraphWriteDisabledError,
+        GraphAuthenticationError,
+        GraphRequestError,
+        ActionQueueStorageError,
+        ActionAuditStorageError,
+        ActionExecutionGuardError,
+        ActionExecutionPersistenceError,
+        ActionExecutionAuditError,
+        ValidationError,
+    ) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    _render_rollback_reconciliation(report, output_format)
+    if report.outcome in {
+        RollbackReconciliationOutcome.CONFLICT,
+        RollbackReconciliationOutcome.READ_FAILED,
+    }:
+        raise typer.Exit(code=2)
 
 
 @actions_app.command("execute")

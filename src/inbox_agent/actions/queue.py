@@ -21,6 +21,7 @@ from inbox_agent.actions.models import (
     MailboxActionStatus,
     MailboxActionType,
     OutlookCategorySnapshot,
+    RollbackExecutionSnapshot,
     build_action_idempotency_key,
 )
 from inbox_agent.models import FrozenModel, MessageDataset
@@ -53,6 +54,14 @@ class ExecutionClaimOutcome(StrEnum):
     CLAIMED = "claimed"
     RETRY_CLAIMED = "retry_claimed"
     ALREADY_SUCCEEDED = "already_succeeded"
+
+
+class RollbackClaimOutcome(StrEnum):
+    """Result of atomically claiming a succeeded action for rollback."""
+
+    CLAIMED = "claimed"
+    RETRY_CLAIMED = "retry_claimed"
+    ALREADY_ROLLED_BACK = "already_rolled_back"
 
 
 class ActionBuildError(Exception):
@@ -148,6 +157,28 @@ class ExecutionClaim(FrozenModel):
         )
         if self.action.status is not expected_status:
             raise ValueError("execution claim outcome does not match action status")
+        return self
+
+
+class RollbackClaim(FrozenModel):
+    """Atomic decision for one explicitly requested rollback attempt."""
+
+    outcome: RollbackClaimOutcome
+    action: MailboxAction
+    attempt_number: int = Field(ge=0)
+    should_execute: bool
+    rollback_idempotency_key: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def validate_claim(self) -> Self:
+        already = self.outcome is RollbackClaimOutcome.ALREADY_ROLLED_BACK
+        if self.should_execute is already:
+            raise ValueError("rollback claim outcome does not match should_execute")
+        expected = (
+            MailboxActionStatus.ROLLED_BACK if already else MailboxActionStatus.ROLLBACK_EXECUTING
+        )
+        if self.action.status is not expected:
+            raise ValueError("rollback claim outcome does not match action status")
         return self
 
 
@@ -520,6 +551,253 @@ class ActionQueueRepository:
         except ActionFileLockError as error:
             raise ActionQueueStorageError(f"Unable to lock action queue: {self.path}") from error
 
+    def claim_rollback(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+        *,
+        reason: str,
+    ) -> RollbackClaim:
+        """Atomically claim one succeeded/failed rollback or no-op a completed one."""
+
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            raise ActionExecutionGuardError("Rollback reason must not be empty")
+        self._validate_rollback_key(rollback_idempotency_key)
+        try:
+            with self._lock():
+                queue = self._load_unlocked()
+                current = self._require_action(queue, action_id)
+                self._require_rollback_identity(
+                    current,
+                    rollback_idempotency_key,
+                    normalized_reason,
+                )
+                if current.status is MailboxActionStatus.ROLLED_BACK:
+                    return self._rollback_claim(
+                        current,
+                        rollback_idempotency_key,
+                        RollbackClaimOutcome.ALREADY_ROLLED_BACK,
+                        should_execute=False,
+                    )
+
+                outcome = RollbackClaimOutcome.CLAIMED
+                if current.status is MailboxActionStatus.ROLLBACK_FAILED:
+                    outcome = RollbackClaimOutcome.RETRY_CLAIMED
+                elif current.status is not MailboxActionStatus.SUCCEEDED:
+                    raise ActionExecutionGuardError(
+                        f"Action cannot be rolled back from status {current.status}: {action_id}"
+                    )
+                occurred_at = self.clock()
+                claimed = current.transition(
+                    MailboxActionStatus.ROLLBACK_EXECUTING,
+                    occurred_at=occurred_at,
+                    actor=ActionActor.SYSTEM,
+                    note=f"Rollback requested: {normalized_reason}",
+                )
+                self._replace_unlocked(queue, claimed, occurred_at)
+                return self._rollback_claim(
+                    claimed,
+                    rollback_idempotency_key,
+                    outcome,
+                    should_execute=True,
+                )
+        except ActionFileLockError as error:
+            raise ActionQueueStorageError(f"Unable to lock action queue: {self.path}") from error
+
+    def mark_rollback_write_in_flight(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+        snapshot: RollbackExecutionSnapshot,
+    ) -> MailboxAction:
+        """Persist the exact rollback comparison states before the single PATCH."""
+
+        return self._prepare_or_complete_rollback(
+            action_id,
+            rollback_idempotency_key,
+            snapshot,
+            MailboxActionStatus.ROLLBACK_WRITE_IN_FLIGHT,
+        )
+
+    def complete_rollback_without_write(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+        snapshot: RollbackExecutionSnapshot,
+        *,
+        note: str,
+    ) -> MailboxAction:
+        """Record a verified no-change rollback with its live snapshot."""
+
+        return self._prepare_or_complete_rollback(
+            action_id,
+            rollback_idempotency_key,
+            snapshot,
+            MailboxActionStatus.ROLLED_BACK,
+            note=note,
+        )
+
+    def _prepare_or_complete_rollback(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+        snapshot: RollbackExecutionSnapshot,
+        status: Literal[
+            MailboxActionStatus.ROLLBACK_WRITE_IN_FLIGHT,
+            MailboxActionStatus.ROLLED_BACK,
+        ],
+        *,
+        note: str | None = None,
+    ) -> MailboxAction:
+        self._validate_rollback_key(rollback_idempotency_key)
+        if snapshot.rollback_idempotency_key != rollback_idempotency_key:
+            raise ActionExecutionGuardError("Rollback snapshot idempotency key does not match")
+        try:
+            with self._lock():
+                queue = self._load_unlocked()
+                current = self._require_action(queue, action_id)
+                if current.status is not MailboxActionStatus.ROLLBACK_EXECUTING:
+                    raise ActionExecutionGuardError(
+                        f"Action has no active rollback preflight: {action_id}"
+                    )
+                prepared = current.model_copy(update={"rollback_snapshot": snapshot})
+                occurred_at = self.clock()
+                updated = prepared.transition(
+                    status,
+                    occurred_at=occurred_at,
+                    actor=ActionActor.SYSTEM,
+                    note=note,
+                )
+                self._replace_unlocked(queue, updated, occurred_at)
+                return updated
+        except ActionFileLockError as error:
+            raise ActionQueueStorageError(f"Unable to lock action queue: {self.path}") from error
+
+    def complete_rollback(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+        *,
+        note: str,
+    ) -> MailboxAction:
+        return self._finalize_rollback(
+            action_id,
+            rollback_idempotency_key,
+            MailboxActionStatus.ROLLED_BACK,
+            note=note,
+        )
+
+    def fail_rollback(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+        *,
+        note: str,
+    ) -> MailboxAction:
+        return self._finalize_rollback(
+            action_id,
+            rollback_idempotency_key,
+            MailboxActionStatus.ROLLBACK_FAILED,
+            note=note,
+        )
+
+    def mark_rollback_unknown(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+        *,
+        note: str,
+    ) -> MailboxAction:
+        return self._finalize_rollback(
+            action_id,
+            rollback_idempotency_key,
+            MailboxActionStatus.ROLLBACK_OUTCOME_UNKNOWN,
+            note=note,
+        )
+
+    def get_uncertain_rollback(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+    ) -> MailboxAction:
+        """Load an uncertain rollback for a zero-write live comparison."""
+
+        try:
+            with self._lock():
+                queue = self._load_unlocked()
+                current = self._require_action(queue, action_id)
+                self._require_rollback_identity(current, rollback_idempotency_key, None)
+                if current.status not in {
+                    MailboxActionStatus.ROLLBACK_WRITE_IN_FLIGHT,
+                    MailboxActionStatus.ROLLBACK_OUTCOME_UNKNOWN,
+                }:
+                    raise ActionExecutionGuardError(
+                        f"Action does not require rollback reconciliation: {action_id}"
+                    )
+                return current
+        except ActionFileLockError as error:
+            raise ActionQueueStorageError(f"Unable to lock action queue: {self.path}") from error
+
+    def resolve_uncertain_rollback(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+        status: Literal[MailboxActionStatus.ROLLED_BACK, MailboxActionStatus.ROLLBACK_FAILED],
+        *,
+        note: str,
+    ) -> MailboxAction:
+        """Resolve an uncertain rollback after one read and no writes."""
+
+        return self._finalize_rollback(
+            action_id,
+            rollback_idempotency_key,
+            status,
+            note=note,
+            allowed_from={
+                MailboxActionStatus.ROLLBACK_WRITE_IN_FLIGHT,
+                MailboxActionStatus.ROLLBACK_OUTCOME_UNKNOWN,
+            },
+        )
+
+    def _finalize_rollback(
+        self,
+        action_id: str,
+        rollback_idempotency_key: str,
+        status: Literal[
+            MailboxActionStatus.ROLLED_BACK,
+            MailboxActionStatus.ROLLBACK_FAILED,
+            MailboxActionStatus.ROLLBACK_OUTCOME_UNKNOWN,
+        ],
+        *,
+        note: str,
+        allowed_from: set[MailboxActionStatus] | None = None,
+    ) -> MailboxAction:
+        try:
+            with self._lock():
+                queue = self._load_unlocked()
+                current = self._require_action(queue, action_id)
+                self._require_rollback_identity(current, rollback_idempotency_key, None)
+                valid_from = allowed_from or {
+                    MailboxActionStatus.ROLLBACK_EXECUTING,
+                    MailboxActionStatus.ROLLBACK_WRITE_IN_FLIGHT,
+                }
+                if current.status not in valid_from:
+                    raise ActionExecutionGuardError(
+                        f"Action has no active rollback to finalize: {action_id}"
+                    )
+                occurred_at = self.clock()
+                updated = current.transition(
+                    status,
+                    occurred_at=occurred_at,
+                    actor=ActionActor.SYSTEM,
+                    note=note,
+                )
+                self._replace_unlocked(queue, updated, occurred_at)
+                return updated
+        except ActionFileLockError as error:
+            raise ActionQueueStorageError(f"Unable to lock action queue: {self.path}") from error
+
     @staticmethod
     def _require_action(queue: ActionQueue, action_id: str) -> MailboxAction:
         current = queue.find(action_id)
@@ -536,6 +814,32 @@ class ActionQueueRepository:
         if action.idempotency_key != supplied_key:
             raise ActionExecutionGuardError(
                 f"Idempotency key does not match action: {action.action_id}"
+            )
+
+    @staticmethod
+    def _validate_rollback_key(supplied_key: str) -> None:
+        invalid_character = any(character not in "0123456789abcdef" for character in supplied_key)
+        if len(supplied_key) != 64 or invalid_character:
+            raise ActionExecutionGuardError(
+                "Rollback idempotency key must be 64 lowercase hex characters"
+            )
+
+    @classmethod
+    def _require_rollback_identity(
+        cls,
+        action: MailboxAction,
+        supplied_key: str,
+        reason: str | None,
+    ) -> None:
+        cls._validate_rollback_key(supplied_key)
+        snapshot = action.rollback_snapshot
+        if snapshot is not None and snapshot.rollback_idempotency_key != supplied_key:
+            raise ActionExecutionGuardError(
+                f"Rollback idempotency key does not match action: {action.action_id}"
+            )
+        if snapshot is not None and reason is not None and snapshot.reason != reason:
+            raise ActionExecutionGuardError(
+                f"Rollback reason does not match the original attempt: {action.action_id}"
             )
 
     @staticmethod
@@ -556,6 +860,26 @@ class ActionQueueRepository:
             attempt_number=attempt_number,
             should_execute=should_execute,
             idempotency_key=action.idempotency_key,
+        )
+
+    @staticmethod
+    def _rollback_claim(
+        action: MailboxAction,
+        rollback_idempotency_key: str,
+        outcome: RollbackClaimOutcome,
+        *,
+        should_execute: bool,
+    ) -> RollbackClaim:
+        attempt_number = sum(
+            transition.to_status is MailboxActionStatus.ROLLBACK_EXECUTING
+            for transition in action.transition_history
+        )
+        return RollbackClaim(
+            outcome=outcome,
+            action=action,
+            attempt_number=attempt_number,
+            should_execute=should_execute,
+            rollback_idempotency_key=rollback_idempotency_key,
         )
 
     def _replace_unlocked(

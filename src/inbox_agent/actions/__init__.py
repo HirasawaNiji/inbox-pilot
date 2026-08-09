@@ -46,6 +46,7 @@ from inbox_agent.actions.models import (
     MailboxActionStatus,
     MailboxActionType,
     OutlookCategorySnapshot,
+    RollbackExecutionSnapshot,
     build_action_idempotency_key,
     can_transition,
 )
@@ -61,6 +62,8 @@ from inbox_agent.actions.queue import (
     ExecutionClaim,
     ExecutionClaimOutcome,
     QueueUpdateReport,
+    RollbackClaim,
+    RollbackClaimOutcome,
     build_review_actions,
 )
 from inbox_agent.actions.rollback import (
@@ -69,6 +72,14 @@ from inbox_agent.actions.rollback import (
     RollbackPlanError,
     build_rollback_dry_run,
     build_rollback_idempotency_key,
+)
+from inbox_agent.actions.rollback_executor import (
+    ControlledRollbackExecutor,
+    RollbackExecutionOutcome,
+    RollbackExecutionReport,
+    RollbackReconciliationOutcome,
+    RollbackReconciliationReport,
+    UncertainRollbackReconciler,
 )
 
 __all__ = [
@@ -106,6 +117,7 @@ __all__ = [
     "ApprovedActionGraphExecutor",
     "CategoryGraphClientProtocol",
     "CategoryWritePlan",
+    "ControlledRollbackExecutor",
     "DryRunReport",
     "ExecutionClaim",
     "ExecutionClaimOutcome",
@@ -116,8 +128,16 @@ __all__ = [
     "QueueUpdateReport",
     "RollbackDryRunPlan",
     "RollbackDryRunReport",
+    "RollbackExecutionOutcome",
+    "RollbackExecutionReport",
+    "RollbackExecutionSnapshot",
+    "RollbackClaim",
+    "RollbackClaimOutcome",
     "RollbackPlanError",
+    "RollbackReconciliationOutcome",
+    "RollbackReconciliationReport",
     "UncertainActionReconciler",
+    "UncertainRollbackReconciler",
     "build_review_actions",
     "build_action_idempotency_key",
     "build_dry_run",

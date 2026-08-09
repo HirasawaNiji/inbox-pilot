@@ -684,6 +684,42 @@ def test_actions_execute_confirmation_gate_precedes_all_graph_and_queue_work(
     assert queue_path.read_bytes() == queue_before
 
 
+@pytest.mark.parametrize("confirmation", [None, "another-action"])
+def test_actions_rollback_confirmation_gate_precedes_all_external_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    confirmation: str | None,
+) -> None:
+    queue_path = tmp_path / "action_queue.json"
+    queue_path.write_text('{"unchanged": true}', encoding="utf-8")
+    queue_before = queue_path.read_bytes()
+
+    def forbidden_config_load(*args: object, **kwargs: object) -> None:
+        raise AssertionError("rollback confirmation must precede configuration loading")
+
+    monkeypatch.setattr("inbox_agent.cli.load_graph_write_settings", forbidden_config_load)
+    arguments = [
+        "actions",
+        "rollback-execute",
+        "action-one",
+        "--reason",
+        "Incorrect classification",
+        "--rollback-idempotency-key",
+        "a" * 64,
+        "--queue",
+        str(queue_path),
+    ]
+    if confirmation is not None:
+        arguments.extend(["--confirm-action", confirmation])
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1
+    assert "rollback confirmation denied" in result.stderr
+    assert "No Graph request was sent" in result.stderr
+    assert queue_path.read_bytes() == queue_before
+
+
 def test_actions_execute_uses_silent_auth_and_exactly_one_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
