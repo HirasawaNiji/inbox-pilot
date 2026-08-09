@@ -4,8 +4,8 @@ InboxPilot 是一个面向 Microsoft 365 / Outlook 邮箱的本地、可解释�
 YAML 规则与可选的 OpenAI / DeepSeek 模型，为邮件生成 P1～P5 优先级、类别、摘要、待办事项、
 截止时间和人工复核建议，并能在明确授权后把分类安全写回 Outlook。
 
-项目当前以 CLI 形式运行，不需要部署服务器。默认模式完全离线；邮箱、LLM 和写回能力都必须由
-用户分别配置和授权。
+项目可以通过 CLI 运行，也提供只监听本机回环地址的 FastAPI 接口。默认模式完全离线；邮箱、
+LLM 和写回能力都必须由用户分别配置和授权。
 
 ## 功能概览
 
@@ -18,11 +18,12 @@ YAML 规则与可选的 OpenAI / DeepSeek 模型，为邮件生成 P1～P5 优�
 - 对结果不确定的写入执行零 PATCH 对账，并支持保留用户分类的受控回滚；
 - 使用 SQLite 持久化邮件、分析、动作、同步游标、工作流和服务状态；
 - 通过统一增量工作流和单实例本地调度器持续同步与分析，跳过未变化邮件；
+- 通过本地 FastAPI 查询邮件和解释结果，并复用既有审批、审计、写回、对账与回滚安全层；
 - 提供 50 封匿名样例、离线评测、真实 LLM 验证和完整自动化测试。
 
 ## 项目状态
 
-**阶段一至阶段三已经全部完成；阶段四步骤一至三已经完成，下一步为本地 Web API。**
+**阶段一至阶段三已经全部完成；阶段四步骤一至四已经完成，下一步为本地 Web 控制台。**
 
 2026-08-09，阶段三在个人 Outlook 真实环境已完成以下验收：
 
@@ -40,9 +41,11 @@ YAML 规则与可选的 OpenAI / DeepSeek 模型，为邮件生成 P1～P5 优�
 - 本地调度器完成单次运行、单实例锁、状态保存、失败退避和优雅停止验收；
 - 一封新到达的真实 Outlook 邮件被只读同步并生成 `P4 / general_notice` 待确认动作；
 - 自动工作流保持 Graph 写请求为 0；人工批准后，受控执行器成功写入对应 Outlook 分类。
+- 本地 FastAPI 文档、真实 SQLite 读取、筛选、审批、预览、单动作执行、对账和回滚接口通过验收；
+- 写回与回滚接口要求显式 Action ID 确认，并继续复用既有写前检查、锁、审计和幂等控制。
 
-当前自动化质量基线为 398 项测试通过，Ruff 和 mypy 通过。真实邮件、令牌、API Key、私有队列
-和审计日志均由 Git 忽略。
+当前自动化质量基线为 404 项测试通过，覆盖率 83.04%，Ruff 和 mypy 通过。真实邮件、令牌、
+API Key、私有队列和审计日志均由 Git 忽略。
 
 | 阶段 | 结果 | 详细文档 |
 | --- | --- | --- |
@@ -50,14 +53,15 @@ YAML 规则与可选的 OpenAI / DeepSeek 模型，为邮件生成 P1～P5 优�
 | 阶段二 | 结构化 LLM、路由融合与 Outlook 只读同步完成 | [LLM Provider](docs/llm_provider.md)、[Outlook 同步](docs/microsoft_graph_sync.md) |
 | 阶段 2.5 | 50 封样例与 DeepSeek 真实验证完成 | [DeepSeek 验证](docs/stage2_5_deepseek_validation.md) |
 | 阶段三 | 人工确认、分类写回、审计、对账、回滚及真实小批量验收完成 | [单动作 CLI](docs/stage3_single_action_cli.md)、[受控回滚](docs/stage3_rollback.md) |
-| 阶段四 | SQLite、统一增量工作流和单实例定时服务完成；Web API 待实现 | [SQLite 持久化](docs/stage4_sqlite_persistence.md)、[工作流编排](docs/stage4_workflow_orchestration.md)、[本地调度服务](docs/stage4_local_scheduler.md) |
+| 阶段四 | SQLite、统一增量工作流、单实例定时服务和本地 Web API 完成；Web 控制台待实现 | [SQLite 持久化](docs/stage4_sqlite_persistence.md)、[工作流编排](docs/stage4_workflow_orchestration.md)、[本地调度服务](docs/stage4_local_scheduler.md)、[FastAPI Web API](docs/stage4_fastapi_web_api.md) |
 
 阶段四开发步骤：
 
 - [x] 步骤一：SQLite 持久化与 Alembic 迁移；
 - [x] 步骤二：同步、导入、增量分析和动作生成的统一工作流；
 - [x] 步骤三：单实例本地调度器、状态探测与失败退避；
-- [ ] 步骤四：本地 FastAPI Web API（下一步）。
+- [x] 步骤四：本地 FastAPI Web API；
+- [ ] 步骤五：Jinja2 + HTMX 本地 Web 控制台（下一步）。
 
 ## 快速开始
 
@@ -140,6 +144,19 @@ uv run inbox-agent service status --config config/service.local.yaml
 
 长期运行使用 `service start`，按 `Ctrl+C` 优雅停止。配置和退避规则见
 [本地调度服务指南](docs/stage4_local_scheduler.md)。
+
+### 5. 启动本地 Web API（阶段四）
+
+```powershell
+uv run uvicorn inbox_agent.web.app:create_app `
+  --factory `
+  --host 127.0.0.1 `
+  --port 8765
+```
+
+浏览器打开 <http://127.0.0.1:8765/docs> 查看和试用接口。当前 API 面向单用户本地控制台，
+不要绑定到 `0.0.0.0`。危险操作仍要求动作先获批准，并在请求体中再次精确确认 Action ID。
+接口、环境变量和安全边界见 [FastAPI Web API 指南](docs/stage4_fastapi_web_api.md)。
 
 ## 可选：接入 OpenAI 或 DeepSeek
 
@@ -314,6 +331,7 @@ uv run inbox-agent actions rollback-execute ACTION_ID `
 | `inbox-agent workflow status` | 查看最近持久化运行状态 | 仅本地 SQLite |
 | `inbox-agent service run-once` | 使用服务配置执行一次锁定工作流 | 默认离线；可选 Graph 只读和 LLM |
 | `inbox-agent service start/status` | 启动定时服务或查看实际锁与状态 | 自动同步/分析，不自动写回 |
+| `uvicorn inbox_agent.web.app:create_app --factory` | 启动本地 Web API | 默认只读；写回接口必须显式确认 |
 | `inbox-agent outlook login` | 获取只读委托授权 | 登录，不修改邮件 |
 | `inbox-agent outlook sync` | 增量同步收件箱 | Graph 只读 |
 | `inbox-agent actions build/list/show` | 管理本地动作队列 | 仅本地文件 |
@@ -386,6 +404,7 @@ inbox-pilot/
 │   ├── storage/         # SQLite、SQLAlchemy Repository 与 Alembic 迁移
 │   ├── workflow/        # 增量编排、运行状态与失败隔离
 │   ├── service/         # 单实例定时运行、退避与状态探测
+│   ├── web/             # 本地 FastAPI、查询服务与动作业务层适配
 │   ├── loader.py        # JSON 加载与 Schema 校验
 │   ├── normalizer.py    # HTML 与字段标准化
 │   ├── rule_engine.py   # YAML 可解释规则引擎
@@ -426,6 +445,7 @@ uv run inbox-agent evaluate
 - [阶段四 SQLite 持久化](docs/stage4_sqlite_persistence.md)
 - [阶段四统一工作流编排](docs/stage4_workflow_orchestration.md)
 - [阶段四本地调度服务](docs/stage4_local_scheduler.md)
+- [阶段四本地 FastAPI Web API](docs/stage4_fastapi_web_api.md)
 
 ### 分类写回与安全
 
