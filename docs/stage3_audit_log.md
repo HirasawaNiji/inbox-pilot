@@ -104,7 +104,7 @@ Get-Content data/private/audit/actions.jsonl -Tail 10
 - JSONL 的去重检查与追加现在受步骤五的跨进程文件锁保护，多个守规仓储调用者不会互相覆盖；
 - 队列 JSON 和审计 JSONL 是两个本地文件，磁盘故障时不能形成跨文件数据库事务；
 - 确定性事件和 `actions build` 的历史补齐可以恢复大多数中断场景；
-- 回滚 dry-run 已记录为 `rollback_dry_run_planned`；分类执行和不确定结果对账已记录为 `graph_operation_recorded`，真实回滚完成事件仍待扩展；
+- 回滚 dry-run 记录为 `rollback_dry_run_planned`；正向执行、真实回滚及两类不确定结果对账均记录为 `graph_operation_recorded`；
 - 日志轮换、归档和保留周期尚未实现。
 
 后半步骤四已把该日志接入受控执行器和只读对账器，详见[执行审计与对账](stage3_execution_audit_and_reconciliation.md)。

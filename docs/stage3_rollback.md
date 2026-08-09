@@ -1,124 +1,149 @@
-# 阶段三步骤六：受控回滚计划
+# 阶段三：真实受控回滚
 
-步骤六为已经成功执行的 InboxPilot 分类动作生成本地恢复计划。当前功能严格限制为 dry-run：不申请 `Mail.ReadWrite`，不构造 Graph 写请求，不修改 Outlook，也不会把动作提前标记为 `rolled_back`。
+本功能用于撤销一个已经成功写入 Outlook 的 InboxPilot 分类动作。它只恢复
+`InboxPilot/` 命名空间，绝不会移动、删除、发送邮件，也不会修改主题或正文。
 
-## 使用条件
+代码与模拟 Graph Client 验收已经完成，并于 2026-08-09 使用一封专用 Outlook 测试邮件完成真实回滚验收。
 
-回滚计划必须同时满足：
+## 安全边界
 
-- 明确指定一个动作 ID，不支持批量回滚；
-- 动作状态必须是 `succeeded`；
-- 动作必须具有步骤五生成并校验过的前向幂等键；
-- 用户必须通过 `--reason` 提供非空原因；
-- 必须显式传入 `--dry-run`。
+- 一次只允许回滚一个明确的 Action ID，不提供批量入口；
+- 只接受状态为 `succeeded` 的动作；
+- 必须先运行 dry-run，并提交它生成的独立回滚幂等键；
+- 必须填写非空原因，并用 `--confirm-action` 重复同一个 Action ID；
+- 使用默认关闭的私有 `graph_write.local.yaml` 和独立 `Mail.ReadWrite` 令牌缓存；
+- 写前重新 GET 最新分类和 `changeKey`；
+- 当前 InboxPilot 分类只要不等于正向动作的目标，就按冲突处理并保持零 PATCH；
+- 保留写入后由用户新增的所有非 `InboxPilot/` 分类；
+- 单次执行最多发送一次 PATCH，客户端不跟随重定向，也不自动重试；
+- PATCH 结果不确定时进入专用状态，只能通过零 PATCH 对账命令处理。
 
-命令示例：
-
-```powershell
-uv run inbox-agent actions rollback ACTION_ID `
-  --reason "分类结果不符合预期" `
-  --dry-run
-```
-
-输出机器可读 JSON：
+## 第一步：生成本地预览
 
 ```powershell
-uv run inbox-agent actions rollback ACTION_ID `
+$plan = uv run inbox-agent actions rollback ACTION_ID `
   --reason "分类结果不符合预期" `
   --dry-run `
+  --format json | ConvertFrom-Json
+
+$rollbackKey = $plan.plan.rollback_idempotency_key
+$rollbackKey
+```
+
+预览不会读取或修改 Outlook，`graph_write_request_count` 固定为 `0`。它展示原始
+InboxPilot 分类、正向写入后的预期分类、计划新增/移除的分类以及回滚幂等键。
+
+## 第二步：执行一封邮件的真实回滚
+
+确认测试邮件当前状态后执行：
+
+```powershell
+uv run inbox-agent actions rollback-execute ACTION_ID `
+  --reason "分类结果不符合预期" `
+  --rollback-idempotency-key $rollbackKey `
+  --confirm-action ACTION_ID `
+  --graph-config config/graph_write.local.yaml `
   --format json
 ```
 
-自定义私有文件路径：
+确认门在配置加载、令牌读取、队列读取和 Graph 请求之前执行。Action ID 不一致时，
+命令退出码为 `1`，并明确报告没有发送 Graph 请求。
 
-```powershell
-uv run inbox-agent actions rollback ACTION_ID `
-  --reason "测试恢复计划" `
-  --dry-run `
-  --queue data/private/action_queue.test.json `
-  --audit-log data/private/audit/test-actions.jsonl
-```
+成功输出的主要结果：
 
-省略 `--dry-run` 时，命令以退出码 `1` 拒绝继续。动作不是 `succeeded`、不存在、缺少幂等键或原因仅包含空白时也会失败。
+| outcome | 最终状态 | GET | PATCH | 含义 |
+| --- | --- | ---: | ---: | --- |
+| `rolled_back` | `rolled_back` | 1 | 1 | Graph 已返回并验证恢复后的分类 |
+| `no_change` | `rolled_back` | 1 | 0 | 实时分类已经是恢复目标 |
+| `already_rolled_back` | `rolled_back` | 0 | 0 | 同一回滚的幂等重放 |
+| `conflict` | `rollback_failed` | 1 | 0 | InboxPilot 分类已被其他操作改变 |
+| `failed` | `rollback_failed` | 1 | 0 或 1 | 读取失败或 Graph 明确拒绝写入 |
+| `outcome_unknown` | `rollback_outcome_unknown` | 1 | 1 | PATCH 可能成功，禁止盲目重试 |
 
-## 恢复目标
+`conflict`、`failed` 和 `outcome_unknown` 使用退出码 `2`；配置、确认、认证或本地持久化
+错误使用退出码 `1`。
 
-前向动作只管理 `InboxPilot/` 命名空间。回滚计划把动作创建时的分类快照分成两组：
+## 实时恢复算法
 
-- 原始用户分类，例如 `School`、`Important`；
-- 原始 InboxPilot 分类，例如 `InboxPilot/P3`。
-
-计划先推导前向动作成功后的预期状态：
+dry-run 的最终集合来自动作创建时的历史快照；真实执行不会直接写入该旧集合。
+执行器会在写前重新读取实时分类，然后计算：
 
 ```text
-原始用户分类 + 前向动作的 InboxPilot 分类
+实时非 InboxPilot 分类 + 动作创建前的 InboxPilot 分类
 ```
-
-然后计算恢复到原始快照所需的精确差异：
-
-- `add_categories`：原始快照存在、预期写后状态缺少的 InboxPilot 分类；
-- `remove_categories`：前向动作增加、原始快照不存在的 InboxPilot 分类；
-- `final_categories`：动作创建时的原始分类快照；
-- `would_write`：上述差异是否为空。
 
 例如：
 
 ```text
-原始：School, Important, InboxPilot/P5, InboxPilot/old_notice
-预期写后：School, Important, InboxPilot/P1, InboxPilot/security_alert
-恢复新增：InboxPilot/P5, InboxPilot/old_notice
-恢复移除：InboxPilot/P1, InboxPilot/security_alert
-最终：School, Important, InboxPilot/P5, InboxPilot/old_notice
+动作创建前：School, InboxPilot/P5
+正向写入后：School, InboxPilot/P1, InboxPilot/security_alert
+用户后来新增：AcceptanceKeep
+真实回滚目标：School, AcceptanceKeep, InboxPilot/P5
 ```
 
-该计划始终保留原始快照中的非 InboxPilot 分类，不会计划删除用户自己的分类。
+因此 `AcceptanceKeep` 会被保留。写前读取到的分类、目标分类、`changeKey`、回滚原因和幂等键
+会持久化到私有动作队列的 `rollback_snapshot`，供崩溃后对账使用；公开审计日志不保存分类列表
+或原始 Message ID。
 
-## 回滚幂等键
+## 结果不确定时的对账
 
-每个计划具有独立的 `rollback_idempotency_key`。它由以下语义输入生成 SHA-256：
+若网络在 PATCH 后中断，不要再次运行 `rollback-execute`。执行：
 
-- 前向动作 ID；
-- 前向动作幂等键；
-- 预期写后分类集合；
-- 回滚最终分类集合。
+```powershell
+uv run inbox-agent actions rollback-reconcile ACTION_ID `
+  --rollback-idempotency-key $rollbackKey `
+  --graph-config config/graph_write.local.yaml `
+  --format json
+```
 
-分类集合排序后再参与哈希，因此单纯改变排列不会改变键。用户原因和生成时间不属于写入语义，同一恢复操作更换说明或再次预览时仍得到相同键。加载计划时会重新计算并校验，篡改分类差异或幂等键会被 Schema 拒绝。
+该命令固定执行一次 GET、零次 PATCH：
 
-## 快照与真实状态的边界
+- 实时分类等于持久化目标：`applied` → `rolled_back`；
+- 实时分类等于 PATCH 前快照：`not_applied` → `rollback_failed`；
+- 两者都不等：`conflict` → `rollback_failed`；
+- GET 失败：`read_failed`，保留不确定状态以便稍后再次只读对账。
 
-回滚 dry-run 基于动作生成时的快照和前向写入计划，并没有读取当前 Outlook 邮件。`original_change_key` 仅用于说明原始观察版本，不能直接作为未来回滚写入的并发依据。
+## 回滚状态机
 
-真实回滚执行器必须在写入前：
+```text
+succeeded
+  -> rollback_executing
+  -> rollback_write_in_flight
+  -> rolled_back | rollback_failed | rollback_outcome_unknown
 
-1. 重新读取邮件的最新分类与 `changeKey`；
-2. 确认当前 InboxPilot 分类与被回滚动作之间没有冲突；
-3. 保留动作生成后用户新增加的所有非 InboxPilot 分类；
-4. 重新计算实际差异；
-5. 通过严格 Graph URL 和方法 allowlist 执行；
-6. 只有 Graph 成功后，才能由 `system` 把动作标记为 `rolled_back`。
+rollback_outcome_unknown
+  -> rolled_back | rollback_failed       # 只能由只读对账决定
 
-因此，当前计划是可审查的恢复意图，不是可直接发送的 Graph 请求。
+rollback_failed
+  -> rollback_executing                  # 显式重试，仍需同一安全校验
+```
 
-## 审计与状态安全
+`rolled_back` 是终态。真实 PATCH 前必须先持久化 `rollback_write_in_flight` 和
+`rollback_snapshot`；若这一步或对应审计不能落盘，执行器不会发送 PATCH。
 
-每次成功生成回滚预览会追加 `rollback_dry_run_planned` 审计事件，包含：
+## 本地自动化验收
 
-- 动作 ID 与哈希后的邮件 ID；
-- `succeeded` 源状态；
-- 用户提供的原因；
-- 分类新增、移除和数量；
-- 固定为 `0` 的 Graph 写请求数。
+```powershell
+uv run pytest tests/test_action_rollback.py `
+  tests/test_action_rollback_executor.py `
+  tests/test_action_models.py `
+  tests/test_action_queue.py `
+  tests/test_cli.py -q
+```
 
-审计事件不包含邮件主题、正文、摘要、原始邮件 ID、令牌或 API Key。原因属于用户输入，应避免填写邮件正文或其他敏感内容。
+自动化测试全部使用模拟 Graph Client，不会访问真实 Outlook。真实验收应只使用一封可丢弃的
+测试邮件，并在回滚后确认：原始 InboxPilot 分类已恢复、用户分类仍存在、邮件未移动或删除、
+主题与正文没有变化。
 
-回滚 dry-run 不改变队列文件和动作状态。状态机要求 `rolled_back` 只能由 `system` 在未来真实恢复成功后写入，并且必须附带说明；用户请求或 dry-run 不能提前声明回滚已经完成。
+## 真实 Outlook 验收记录
 
-## 当前安全边界
+2026-08-09 对专用测试动作执行了一次真实受控回滚：
 
-- Graph 权限保持 `Mail.Read`；
-- `graph_write_request_count` 由类型固定为 `0`；
-- CLI 测试使用一旦构造就失败的 Graph 客户端替身，回滚 dry-run 仍能通过；
-- 命令执行前后队列文件字节保持一致；
-- 当前没有 Graph 回滚执行器，也没有真实 `rolled_back` CLI。
+- 写前实时分类为 `acceptancekeep`、`InboxPilot/P4`、`InboxPilot/general_notice`；
+- 回滚目标仅为 `acceptancekeep`；
+- Graph 请求计数为一次 GET、一次 PATCH，自动重试为零；
+- 队列状态依次经过 `rollback_executing`、`rollback_write_in_flight`，最终为 `rolled_back`；
+- 用户在 Outlook 中确认 `acceptancekeep` 得到保留，两项 InboxPilot 分类已移除；
+- 邮件未被移动、删除或发送，主题和正文没有变化。
 
-阶段三前半的综合结果见[离线验收报告](stage3_front_half_acceptance.md)。
+因此真实单封回滚验收正式通过。真实 Message ID、令牌、邮件正文和私有队列内容不进入仓库。

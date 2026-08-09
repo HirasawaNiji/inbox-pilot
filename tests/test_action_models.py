@@ -314,19 +314,19 @@ def test_rollback_completion_requires_system_and_reason() -> None:
     )
     with pytest.raises(ValidationError, match="requires actor=system"):
         succeeded.transition(
-            MailboxActionStatus.ROLLED_BACK,
+            MailboxActionStatus.ROLLBACK_EXECUTING,
             occurred_at=CREATED_AT + timedelta(minutes=4),
             actor=ActionActor.USER,
             note="用户要求撤销 InboxPilot 分类。",
         )
     rolled_back = succeeded.transition(
-        MailboxActionStatus.ROLLED_BACK,
+        MailboxActionStatus.ROLLBACK_EXECUTING,
         occurred_at=CREATED_AT + timedelta(minutes=4),
         actor=ActionActor.SYSTEM,
         note="用户要求撤销 InboxPilot 分类。",
     )
 
-    assert rolled_back.status is MailboxActionStatus.ROLLED_BACK
+    assert rolled_back.status is MailboxActionStatus.ROLLBACK_EXECUTING
 
 
 def test_tampered_transition_history_is_rejected() -> None:

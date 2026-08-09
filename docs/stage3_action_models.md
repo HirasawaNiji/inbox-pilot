@@ -48,6 +48,8 @@ pending_review -> approved -> executing -> succeeded -> rolled_back
 
 - `approved` 和 `rejected` 只能由 `user` 触发；
 - `executing`、`write_in_flight`、`outcome_unknown`、`succeeded`、`failed` 和 `rolled_back` 只能由 `system` 触发；其中 `rolled_back` 只能表示执行器已成功完成真实恢复，用户提出回滚意图不能提前改变状态；
+- 真实回滚使用独立的 `rollback_executing`、`rollback_write_in_flight`、`rollback_failed` 和 `rollback_outcome_unknown` 状态，避免与正向写入的失败或不确定结果混淆；
+- `rollback_write_in_flight`、`rollback_outcome_unknown` 和 `rolled_back` 必须具有私有 `rollback_snapshot`，保存 PATCH 前分类、目标分类和实时 `changeKey`，用于零写入对账；
 - `failed`、`outcome_unknown` 和 `rolled_back` 必须包含说明；
 - `rejected` 与 `rolled_back` 是终止状态；
 - 失败动作可以重新进入 `executing`，为后续安全重试预留通道；

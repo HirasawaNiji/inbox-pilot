@@ -86,10 +86,10 @@ uv run pytest tests/test_action_graph_executor.py tests/test_action_audit.py -q
 
 ## 尚未实现
 
-- 已由后半步骤五提供默认关闭的单动作执行和只读对账 CLI，但尚未完成真实 Outlook 单封验收；
+- 已完成默认关闭的单动作执行和只读对账 CLI，并于 2026-08-09 完成真实 Outlook 单封写入验收；
 - 没有批量执行入口和单次批量上限；
 - 没有真实 Outlook 小批量验收；
 - 没有自动日志轮换或跨文件事务；
-- 没有执行真实回滚 PATCH。
+- 真实受控回滚及专用零写入对账已经实现并通过模拟 Graph Client 验收，真实 Outlook 回滚验收尚待进行。
 
 单动作 CLI 的确认门、命令和退出码见[单动作执行与对账 CLI](stage3_single_action_cli.md)。下一步应先完成 no-write 与单封测试邮箱验收，再考虑小批量执行。
