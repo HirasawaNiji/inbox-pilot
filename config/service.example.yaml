@@ -1,0 +1,26 @@
+# Copy to config/service.local.yaml. The local file is ignored by Git.
+# This public template uses isolated sample paths and performs no network access.
+schema_version: "1.0"
+service_name: inbox-pilot
+interval_minutes: 15
+max_backoff_minutes: 60
+run_immediately: true
+lock_path: data/private/inbox_pilot.service.lock
+
+workflow:
+  dataset_path: data/samples/sample_emails.json
+  database_path: data/private/service-test.sqlite3
+  action_queue_path: data/private/service-test-actions.json
+  audit_log_path: data/private/service-test-audit.jsonl
+  policy_path: config/rules.yaml
+
+  # Set this to config/llm_provider.local.yaml only after configuring the
+  # environment-variable name there. Never put an API key in this file.
+  llm_config_path: null
+  llm_routing_path: config/llm_routing.yaml
+  llm_fusion_path: config/llm_fusion.yaml
+
+  # Keep false for the isolated sample acceptance test. For a real personal
+  # Outlook run, set true and point graph_config_path to the read-only config.
+  sync_outlook: false
+  graph_config_path: config/graph.local.yaml

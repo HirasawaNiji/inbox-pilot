@@ -50,6 +50,27 @@ def write_graph_write_config(tmp_path: Path, *, enabled: bool) -> Path:
     return path
 
 
+def write_service_config(tmp_path: Path) -> Path:
+    path = tmp_path / "service.local.yaml"
+    path.write_text(
+        "schema_version: '1.0'\n"
+        "service_name: cli-test\n"
+        "interval_minutes: 1\n"
+        "max_backoff_minutes: 2\n"
+        "run_immediately: true\n"
+        f"lock_path: {(tmp_path / 'private/service.lock').as_posix()}\n"
+        "workflow:\n"
+        f"  dataset_path: {DATASET_PATH.as_posix()}\n"
+        f"  database_path: {(tmp_path / 'private/service.sqlite3').as_posix()}\n"
+        f"  action_queue_path: {(tmp_path / 'private/service-actions.json').as_posix()}\n"
+        f"  audit_log_path: {(tmp_path / 'private/service-audit.jsonl').as_posix()}\n"
+        f"  policy_path: {POLICY_PATH.as_posix()}\n"
+        "  sync_outlook: false\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_demo_runs_bundled_dataset() -> None:
     result = runner.invoke(app, ["demo"])
 
@@ -58,6 +79,164 @@ def test_demo_runs_bundled_dataset() -> None:
     assert "成功 50" in result.stdout
     assert "待复核 7" in result.stdout
     assert "sample-" not in result.stdout
+
+
+def test_database_status_does_not_create_missing_database(tmp_path: Path) -> None:
+    database_path = tmp_path / "private" / "missing.sqlite3"
+
+    result = runner.invoke(
+        app,
+        ["db", "status", "--database", str(database_path), "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["initialized"] is False
+    assert payload["revision"] is None
+    assert payload["counts"]["messages"] == 0
+    assert not database_path.exists()
+
+
+def test_database_init_is_idempotent_and_reports_revision(tmp_path: Path) -> None:
+    database_path = tmp_path / "private" / "inbox_pilot.sqlite3"
+
+    first = runner.invoke(
+        app,
+        ["db", "init", "--database", str(database_path), "--format", "json"],
+    )
+    second = runner.invoke(
+        app,
+        ["db", "init", "--database", str(database_path), "--format", "json"],
+    )
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    payload = json.loads(second.stdout)
+    assert payload["initialized"] is True
+    assert payload["revision"] == "0003_service"
+    assert payload["counts"] == {
+        "messages": 0,
+        "analyses": 0,
+        "actions": 0,
+        "sync_cursors": 0,
+        "workflow_runs": 0,
+    }
+
+
+def test_database_import_json_is_idempotent(tmp_path: Path) -> None:
+    database_path = tmp_path / "private" / "inbox_pilot.sqlite3"
+    command = [
+        "db",
+        "import-json",
+        str(DATASET_PATH),
+        "--database",
+        str(database_path),
+        "--format",
+        "json",
+    ]
+
+    first = runner.invoke(app, command)
+    second = runner.invoke(app, command)
+    status = runner.invoke(
+        app,
+        ["db", "status", "--database", str(database_path), "--format", "json"],
+    )
+
+    assert first.exit_code == 0
+    assert json.loads(first.stdout)["created"] == 50
+    assert second.exit_code == 0
+    second_payload = json.loads(second.stdout)
+    assert second_payload["created"] == 0
+    assert second_payload["updated"] == 0
+    assert second_payload["unchanged"] == 50
+    assert second_payload["normalized"] == 50
+    assert json.loads(status.stdout)["counts"]["messages"] == 50
+
+
+def test_workflow_run_and_status_are_incremental(tmp_path: Path) -> None:
+    database_path = tmp_path / "private" / "inbox_pilot.sqlite3"
+    queue_path = tmp_path / "private" / "action_queue.json"
+    audit_path = tmp_path / "private" / "audit" / "actions.jsonl"
+    command = [
+        "workflow",
+        "run",
+        "--dataset",
+        str(DATASET_PATH),
+        "--database",
+        str(database_path),
+        "--queue",
+        str(queue_path),
+        "--audit-log",
+        str(audit_path),
+        "--format",
+        "json",
+    ]
+
+    first = runner.invoke(app, command)
+    second = runner.invoke(app, command)
+    status = runner.invoke(
+        app,
+        ["workflow", "status", "--database", str(database_path), "--format", "json"],
+    )
+
+    assert first.exit_code == 0
+    first_payload = json.loads(first.stdout)
+    assert first_payload["eligible_messages"] == 50
+    assert first_payload["actions_added"] == 50
+    assert first_payload["graph_write_request_count"] == 0
+    assert second.exit_code == 0
+    second_payload = json.loads(second.stdout)
+    assert second_payload["eligible_messages"] == 0
+    assert second_payload["skipped_current"] == 50
+    assert second_payload["actions_generated"] == 0
+    assert status.exit_code == 0
+    status_payload = json.loads(status.stdout)
+    assert status_payload["latest_run"]["status"] == "completed"
+    assert status_payload["latest_run"]["counters"]["graph_write_request_count"] == 0
+
+
+def test_service_run_once_start_and_status_use_same_incremental_workflow(
+    tmp_path: Path,
+) -> None:
+    config_path = write_service_config(tmp_path)
+
+    first = runner.invoke(
+        app,
+        ["service", "run-once", "--config", str(config_path), "--format", "json"],
+    )
+    scheduled = runner.invoke(
+        app,
+        [
+            "service",
+            "start",
+            "--config",
+            str(config_path),
+            "--max-runs",
+            "1",
+            "--format",
+            "json",
+        ],
+    )
+    status = runner.invoke(
+        app,
+        ["service", "status", "--config", str(config_path), "--format", "json"],
+    )
+
+    assert first.exit_code == 0
+    first_payload = json.loads(first.stdout)
+    assert first_payload["outcome"] == "succeeded"
+    assert first_payload["workflow_report"]["analyzed_messages"] == 50
+    assert first_payload["workflow_report"]["graph_write_request_count"] == 0
+    assert scheduled.exit_code == 0
+    scheduled_payload = json.loads(scheduled.stdout)
+    assert scheduled_payload["workflow_report"]["analyzed_messages"] == 0
+    assert scheduled_payload["workflow_report"]["skipped_current"] == 50
+    assert status.exit_code == 0
+    status_payload = json.loads(status.stdout)
+    assert status_payload["active"] is False
+    assert status_payload["persisted_status"] == "stopped"
+    assert status_payload["database_revision"] == "0003_service"
+    assert status_payload["last_run_id"] == scheduled_payload["workflow_report"]["run_id"]
 
 
 def test_demo_json_is_machine_readable() -> None:
