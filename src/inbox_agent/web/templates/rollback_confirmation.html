@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}确认回滚 · InboxPilot{% endblock %}
+{% block page_title %}确认受控回滚{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/console/actions/{{ action.action_id }}">动作详情</a><span>/</span><span>回滚确认</span></div>
+<section class="danger-banner rollback-banner">
+  <div><p class="eyebrow">受控恢复</p><h2>仅撤销 InboxPilot 管理的类别</h2><p>执行前会重新读取实时类别，任何新增的用户自有类别都会保留。</p></div>
+  <span class="request-counter"><strong>{{ preview.graph_write_request_count }}</strong> 次预览写请求</span>
+</section>
+<section class="panel diff-panel">
+  <div class="panel-header"><div><p class="eyebrow">回滚预览</p><h2>恢复计划</h2></div><span class="status-pill {{ 'warning' if plan.would_write else 'success' }}">{{ '需要修改' if plan.would_write else '无需修改' }}</span></div>
+  <div class="diff-grid">
+    <div><h3>预期当前类别</h3>{% for item in plan.expected_current_categories %}<span class="tag neutral">{{ item }}</span>{% endfor %}</div>
+    <div><h3>恢复</h3>{% for item in plan.add_categories %}<span class="tag add">+ {{ item }}</span>{% else %}<span class="muted">无</span>{% endfor %}</div>
+    <div><h3>移除</h3>{% for item in plan.remove_categories %}<span class="tag remove">− {{ item }}</span>{% else %}<span class="muted">无</span>{% endfor %}</div>
+    <div><h3>恢复后类别</h3>{% for item in plan.final_categories %}<span class="tag">{{ item }}</span>{% else %}<span class="muted">无类别</span>{% endfor %}</div>
+  </div>
+  <p class="preservation-note">✓ 回滚目标来自写回前快照；执行时仍会进行实时冲突检查。</p>
+</section>
+<section class="panel confirmation-panel">
+  <div><p class="eyebrow">再次确认</p><h2>输入完整 Action ID 执行回滚</h2><p>回滚原因：{{ plan.reason }}</p></div>
+  <form method="post" action="/console/actions/{{ action.action_id }}/rollback/execute">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="reason" value="{{ plan.reason }}">
+    <input type="hidden" name="rollback_idempotency_key" value="{{ plan.rollback_idempotency_key }}">
+    <label>Action ID<input name="confirm_action_id" required autocomplete="off" maxlength="128" placeholder="{{ action.action_id }}"></label>
+    <div class="form-actions"><a class="button secondary" href="/console/actions/{{ action.action_id }}">取消</a><button class="button danger" type="submit">确认并执行回滚</button></div>
+  </form>
+</section>
+{% endblock %}

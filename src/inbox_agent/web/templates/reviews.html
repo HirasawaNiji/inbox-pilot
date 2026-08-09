@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}人工复核 · InboxPilot{% endblock %}
+{% block page_title %}人工复核队列{% endblock %}
+{% block content %}
+<section class="review-summary">
+  <div><strong>{{ messages.total }}</strong><span>封分析结果需要复核</span></div>
+  <div><strong>{{ actions.total }}</strong><span>个分类动作等待决定</span></div>
+  <p>邮件分析和 Outlook 动作是两层独立状态。先检查解释，再决定是否批准实际分类变更。</p>
+</section>
+
+<div class="content-grid review-grid">
+  <section class="panel">
+    <div class="panel-header"><div><p class="eyebrow">分析层</p><h2>待复核邮件</h2></div></div>
+    <div class="compact-list">
+      {% for message in messages.items %}
+        <a href="/console/messages/{{ message.database_id }}" class="compact-row">
+          <span class="priority priority-{{ (message.priority.value if message.priority else 'NA')|lower }}">{{ message.priority.value if message.priority else '—' }}</span>
+          <span><strong>{{ message.subject or '（无主题）' }}</strong><small>{{ message.category or '未分类' }} · {{ message.sender_name or message.sender_address }}</small></span>
+        </a>
+      {% else %}
+        <div class="empty-state"><strong>没有待复核邮件</strong></div>
+      {% endfor %}
+    </div>
+  </section>
+  <section class="panel">
+    <div class="panel-header"><div><p class="eyebrow">动作层</p><h2>待确认写回</h2></div></div>
+    <div class="compact-list">
+      {% for action in actions.items %}
+        <a href="/console/actions/{{ action.action_id }}" class="compact-row">
+          <span class="priority priority-{{ action.evidence.triage_result.priority.value|lower }}">{{ action.evidence.triage_result.priority.value }}</span>
+          <span><strong>{{ action.evidence.triage_result.summary }}</strong><small>{{ action.action_id }}</small></span>
+        </a>
+      {% else %}
+        <div class="empty-state"><strong>没有待确认动作</strong></div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

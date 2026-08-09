@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}确认写回 · InboxPilot{% endblock %}
+{% block page_title %}确认 Outlook 写回{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/console/actions/{{ action.action_id }}">动作详情</a><span>/</span><span>写回确认</span></div>
+<section class="danger-banner">
+  <div><p class="eyebrow">即将进行外部修改</p><h2>这是一次真实 Outlook 类别写回</h2><p>执行器会先读取实时类别与 changeKey；发生冲突时保持零 PATCH。</p></div>
+  <span class="request-counter"><strong>{{ preview.graph_write_request_count }}</strong> 次预览写请求</span>
+</section>
+
+<section class="panel diff-panel">
+  <div class="panel-header"><div><p class="eyebrow">零写入预览</p><h2>实际变更</h2></div><span class="status-pill {{ 'warning' if plan.would_write else 'success' }}">{{ '将执行 PATCH' if plan.would_write else '无需变更' }}</span></div>
+  <div class="diff-grid">
+    <div><h3>当前快照</h3>{% for item in plan.current_categories %}<span class="tag neutral">{{ item }}</span>{% else %}<span class="muted">无类别</span>{% endfor %}</div>
+    <div><h3>新增</h3>{% for item in plan.add_categories %}<span class="tag add">+ {{ item }}</span>{% else %}<span class="muted">无</span>{% endfor %}</div>
+    <div><h3>移除</h3>{% for item in plan.remove_categories %}<span class="tag remove">− {{ item }}</span>{% else %}<span class="muted">无</span>{% endfor %}</div>
+    <div><h3>目标结果</h3>{% for item in plan.final_categories %}<span class="tag">{{ item }}</span>{% endfor %}</div>
+  </div>
+  <p class="preservation-note">✓ 所有非 `InboxPilot/` 用户类别都会被保留。</p>
+</section>
+
+<section class="panel confirmation-panel">
+  <div><p class="eyebrow">显式确认</p><h2>输入完整 Action ID 解锁单次执行</h2><p>系统不提供批量写回，也不会自动重试结果不确定的 PATCH。</p></div>
+  <form method="post" action="/console/actions/{{ action.action_id }}/execute">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="idempotency_key" value="{{ action.idempotency_key }}">
+    <label>Action ID
+      <input name="confirm_action_id" required autocomplete="off" maxlength="128" placeholder="{{ action.action_id }}">
+    </label>
+    <div class="form-actions"><a class="button secondary" href="/console/actions/{{ action.action_id }}">取消</a><button class="button danger" type="submit">确认并写回 Outlook</button></div>
+  </form>
+</section>
+{% endblock %}

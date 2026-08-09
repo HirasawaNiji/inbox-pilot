@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}邮件详情 · InboxPilot{% endblock %}
+{% block page_title %}邮件详情{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/console/inbox">收件箱</a><span>/</span><span>{{ detail.message.subject or '无主题' }}</span></div>
+
+<section class="message-hero">
+  <div>
+    <div class="message-heading-tags">
+      {% if detail.triage %}<span class="priority priority-large priority-{{ detail.triage.priority.value|lower }}">{{ detail.triage.priority.value }}</span>{% endif %}
+      {% if detail.triage %}<span class="tag">{{ detail.triage.category }}</span>{% endif %}
+      {% if detail.triage and detail.triage.requires_review %}<span class="tag warning">需要人工复核</span>{% endif %}
+    </div>
+    <h2>{{ detail.message.subject or '（无主题）' }}</h2>
+    <p>{{ detail.message.from_address.name or detail.message.from_address.address }} &lt;{{ detail.message.from_address.address }}&gt;</p>
+  </div>
+  <dl class="message-facts">
+    <div><dt>收到时间</dt><dd>{{ detail.message.received_at|local_datetime }}</dd></div>
+    <div><dt>来源</dt><dd>{{ detail.message.source.value }}</dd></div>
+    <div><dt>附件</dt><dd>{{ '有' if detail.message.effective_has_attachments else '无' }}</dd></div>
+  </dl>
+</section>
+
+<section class="panel body-preview-panel">
+  <div class="panel-header"><div><p class="eyebrow">隐私友好的详情</p><h2>正文预览</h2></div><span class="muted">不加载远程图片</span></div>
+  <p class="body-preview">{{ detail.message.body_preview or '没有可用的正文预览。' }}</p>
+  {% if detail.message.categories %}
+    <div class="category-line"><strong>当前 Outlook 类别</strong>{% for category in detail.message.categories %}<span class="tag neutral">{{ category }}</span>{% endfor %}</div>
+  {% endif %}
+</section>
+
+{% if detail.triage %}
+<section class="decision-banner">
+  <div><p class="eyebrow">最终融合结果</p><h2>{{ detail.triage.priority.value }} · {{ detail.triage.category }}</h2></div>
+  <div class="score-ring"><strong>{{ detail.triage.score }}</strong><span>/100</span></div>
+  <div><strong>{{ (detail.triage.confidence * 100)|round|int }}%</strong><span>置信度</span></div>
+  <div><strong>{{ detail.triage.decision_source.value }}</strong><span>决策来源</span></div>
+</section>
+
+<div class="explanation-grid">
+  <section class="panel">
+    <div class="panel-header"><div><p class="eyebrow">可审计</p><h2>YAML 规则结果</h2></div>{% if detail.rule_evaluation %}<span class="priority priority-{{ detail.rule_evaluation.suggested_priority.value|lower }}">{{ detail.rule_evaluation.suggested_priority.value }}</span>{% endif %}</div>
+    {% if detail.rule_evaluation %}
+      <p class="muted">基础分 {{ detail.rule_evaluation.base_score }} → 最终分 {{ detail.rule_evaluation.final_score }}</p>
+      <div class="reason-list">
+        {% for reason in detail.rule_evaluation.reasons %}
+          <article class="reason-row">
+            <span class="score-change {% if reason.score_change < 0 %}negative{% endif %}">{{ '+' if reason.score_change >= 0 else '' }}{{ reason.score_change }}</span>
+            <div><strong>{{ reason.description }}</strong><small>{{ reason.code }}{% if reason.matched_value %} · 命中 {{ reason.matched_value }}{% endif %}</small></div>
+          </article>
+        {% else %}
+          <p class="muted">没有命中额外规则，使用基础分。</p>
+        {% endfor %}
+      </div>
+    {% else %}<div class="empty-state"><p>没有规则分析记录。</p></div>{% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-header"><div><p class="eyebrow">可选分析</p><h2>LLM 结果</h2></div>{% if detail.llm_analysis %}<span class="priority priority-{{ detail.llm_analysis.analysis.priority.value|lower }}">{{ detail.llm_analysis.analysis.priority.value }}</span>{% endif %}</div>
+    {% if detail.llm_analysis %}
+      <p class="llm-rationale">{{ detail.llm_analysis.analysis.rationale }}</p>
+      <dl class="status-list compact">
+        <div><dt>类别</dt><dd>{{ detail.llm_analysis.analysis.category.value }}</dd></div>
+        <div><dt>置信度</dt><dd>{{ (detail.llm_analysis.analysis.confidence * 100)|round|int }}%</dd></div>
+        <div><dt>Provider</dt><dd>{{ detail.llm_analysis.provider }} / {{ detail.llm_analysis.model_name }}</dd></div>
+      </dl>
+    {% else %}
+      <div class="empty-state"><strong>本封邮件未调用 LLM</strong><p>路由器认为规则结果已足够稳定。</p></div>
+    {% endif %}
+  </section>
+</div>
+
+<section class="panel conflict-panel {% if priority_conflict %}has-conflict{% endif %}">
+  <div class="panel-header"><div><p class="eyebrow">冲突与复核</p><h2>{{ '发现判断冲突' if priority_conflict else '没有优先级冲突' }}</h2></div><span class="status-pill {{ 'warning' if detail.triage.requires_review else 'success' }}">{{ '需要复核' if detail.triage.requires_review else '可直接确认' }}</span></div>
+  {% if review_reasons %}
+    <ul>{% for reason in review_reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
+  {% else %}
+    <p>规则、LLM（如有）与最终融合结果没有触发人工复核条件。</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-header"><div><p class="eyebrow">Agent 输出</p><h2>摘要与待办</h2></div>{% if detail.triage.deadline %}<span class="tag warning">截止 {{ detail.triage.deadline|local_datetime }}</span>{% endif %}</div>
+  <p class="summary-copy">{{ detail.triage.summary }}</p>
+  {% if detail.triage.action_items %}
+    <div class="task-list">
+      {% for item in detail.triage.action_items %}
+        <article><span class="task-check" aria-hidden="true"></span><div><strong>{{ item.description }}</strong>{% if item.evidence %}<small>{{ item.evidence }}</small>{% endif %}</div></article>
+      {% endfor %}
+    </div>
+  {% else %}<p class="muted">没有提取到待办事项。</p>{% endif %}
+</section>
+{% else %}
+<section class="panel empty-state"><strong>这封邮件尚未分析</strong><p>运行工作流后即可查看规则与融合结果。</p></section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}完全退出 · InboxPilot{% endblock %}
+{% block page_title %}完全退出 Web 服务{% endblock %}
+{% block content %}
+<section class="danger-banner">
+  <div>
+    <p class="eyebrow">Destructive local operation</p>
+    <h2>这会停止当前 Web 进程并释放端口</h2>
+    <p>网页将无法访问，直到再次运行启动命令。由当前网页管理的同步会先优雅停止；独立终端中的同步不会被停止。</p>
+  </div>
+</section>
+<section class="panel confirmation-panel">
+  <div>
+    <p class="eyebrow">Explicit confirmation</p>
+    <h2>输入 EXIT 确认完全退出</h2>
+    <p>服务器会先返回完成页面，再执行 Uvicorn 的优雅关闭流程。</p>
+    {% if not shutdown_available %}
+      <div class="notice error">当前实例由原始 Uvicorn 命令启动，无法从网页安全退出。请在终端停止它，然后改用 <span class="monospace">uv run inbox-agent web start</span>。</div>
+    {% endif %}
+  </div>
+  <form method="post" action="/console/system/shutdown">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label>退出确认
+      <input name="confirmation" autocomplete="off" placeholder="EXIT" required>
+    </label>
+    <div class="form-actions">
+      <a class="button secondary" href="/console">取消</a>
+      <button class="button danger" type="submit" {% if not shutdown_available %}disabled{% endif %}>完全退出进程</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}动作详情 · InboxPilot{% endblock %}
+{% block page_title %}动作详情{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/console/actions">动作队列</a><span>/</span><span>{{ action.action_id }}</span></div>
+<section class="panel">
+  <div class="panel-header"><div><p class="eyebrow">单动作安全边界</p><h2>{{ action.action_id }}</h2></div><span class="muted">创建于 {{ action.created_at|local_datetime }}</span></div>
+  {% include "partials/action_panel.html" %}
+</section>
+{% endblock %}

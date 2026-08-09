@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}设置 · InboxPilot{% endblock %}
+{% block scripts %}<script src="/static/settings.js" defer></script>{% endblock %}
+{% block page_title %}Agent 设置{% endblock %}
+{% block content %}
+{% if request.query_params.get('saved') == 'true' %}<div class="notice success">LLM 设置已更新。密钥仅保存在当前 Web 进程内存中。</div>{% endif %}
+<div class="content-grid settings-grid">
+  <section class="panel">
+    <div class="panel-header">
+      <div><p class="eyebrow">Language model</p><h2>LLM 分析</h2></div>
+      <span class="status-pill {{ 'success' if agent.llm_enabled else 'neutral' }}">{{ '已启用' if agent.llm_enabled else '默认关闭' }}</span>
+    </div>
+    <p class="summary-copy">规则引擎始终可用。启用 LLM 后，只有命中选择性路由条件的邮件才会发送给所选 Provider；启动网站和启动同步默认都不会调用 LLM。</p>
+    {% if agent.llm_enabled %}
+      <dl class="status-list compact">
+        <div><dt>Provider</dt><dd>{{ agent.llm_provider.value }}</dd></div>
+        <div><dt>模型</dt><dd>{{ agent.llm_model }}</dd></div>
+        <div><dt>API Key</dt><dd>已载入内存，不可回显</dd></div>
+      </dl>
+    {% endif %}
+    {% if agent.sync_active %}<div class="notice neutral">同步运行期间不能修改 LLM。请先在“运行状态”中停止同步。</div>{% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-header"><div><p class="eyebrow">Memory-only credential</p><h2>选择 Provider 和模型</h2></div></div>
+    <form class="settings-form" method="post" action="/console/settings/llm">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="enabled" value="true">
+      <label>Provider
+        <select id="llm-provider" name="provider" required {% if agent.sync_active %}disabled{% endif %}>
+          <option value="openai" {% if not agent.llm_provider or agent.llm_provider.value == 'openai' %}selected{% endif %}>OpenAI</option>
+          <option value="deepseek" {% if agent.llm_provider and agent.llm_provider.value == 'deepseek' %}selected{% endif %}>DeepSeek</option>
+        </select>
+      </label>
+      <label>模型 ID
+        <select id="llm-model" name="model" data-selected-model="{{ agent.llm_model or '' }}" required {% if agent.sync_active %}disabled{% endif %}>
+          {% for provider, models in provider_models.items() %}
+            {% for model in models %}
+              <option value="{{ model }}" data-provider="{{ provider }}" {% if agent.llm_model == model %}selected{% endif %}>{{ model }}</option>
+            {% endfor %}
+          {% endfor %}
+        </select>
+      </label>
+      <label>API Key
+        <input type="password" name="api_key" autocomplete="new-password" placeholder="不会保存到磁盘，也不会回显" maxlength="10000" required {% if agent.sync_active %}disabled{% endif %}>
+      </label>
+      <div class="notice neutral">OpenAI 固定连接 <span class="monospace">https://api.openai.com/v1</span>；DeepSeek 固定连接 <span class="monospace">https://api.deepseek.com</span>，防止密钥被发送到任意地址。Web 重启后需重新启用。</div>
+      <button class="button primary" type="submit" {% if agent.sync_active %}disabled{% endif %}>启用并仅存入内存</button>
+    </form>
+    {% if agent.llm_enabled %}
+      <form class="disable-llm-form" method="post" action="/console/settings/llm">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="enabled" value="false">
+        <button class="button danger-secondary" type="submit" {% if agent.sync_active %}disabled{% endif %}>关闭 LLM 并清除内存密钥</button>
+      </form>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

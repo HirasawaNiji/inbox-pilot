@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}InboxPilot{% endblock %}</title>
+  <link rel="stylesheet" href="/static/console.css">
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"
+          integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
+          crossorigin="anonymous" defer></script>
+  {% block scripts %}{% endblock %}
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/console">
+        <span class="brand-mark" aria-hidden="true">IP</span>
+        <span><strong>InboxPilot</strong><small>本地邮件智能台</small></span>
+      </a>
+      <nav aria-label="主导航">
+        <a class="nav-link {% if current_path in ['/console', '/console/'] %}active{% endif %}" href="/console">总览</a>
+        <a class="nav-link {% if current_path.startswith('/console/inbox') or current_path.startswith('/console/messages') %}active{% endif %}" href="/console/inbox">收件箱</a>
+        <a class="nav-link {% if current_path.startswith('/console/reviews') %}active{% endif %}" href="/console/reviews">人工复核</a>
+        <a class="nav-link {% if current_path.startswith('/console/actions') %}active{% endif %}" href="/console/actions">待确认动作</a>
+        <a class="nav-link {% if current_path.startswith('/console/operations') %}active{% endif %}" href="/console/operations">运行状态</a>
+        <a class="nav-link {% if current_path.startswith('/console/settings') %}active{% endif %}" href="/console/settings">设置</a>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="local-status"><span class="local-dot" aria-hidden="true"></span>仅在本机运行</div>
+        <div class="exit-actions">
+          <a href="/console/system/background">转入后台</a>
+          <a class="exit-danger" href="/console/system/shutdown">完全退出</a>
+        </div>
+      </div>
+    </aside>
+    <main id="main-content" class="main-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Microsoft 365 · Explainable triage</p>
+          <h1>{% block page_title %}InboxPilot{% endblock %}</h1>
+        </div>
+        <div class="topbar-actions">
+          <a class="button secondary" href="/docs">API 文档</a>
+          <span class="privacy-badge">本地 · 不缓存</span>
+        </div>
+      </header>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

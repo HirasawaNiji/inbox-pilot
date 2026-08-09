@@ -104,6 +104,8 @@ from inbox_agent.storage import (
     storage_counts,
     upgrade_database,
 )
+from inbox_agent.web import WebSettings
+from inbox_agent.web.server import run_web_server
 from inbox_agent.workflow import (
     WorkflowExecutionError,
     WorkflowReport,
@@ -133,6 +135,15 @@ class OutputFormat(StrEnum):
     JSON = "json"
 
 
+class WebLogLevel(StrEnum):
+    """Supported Uvicorn log levels for the managed local server."""
+
+    DEBUG = "debug"
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
 app = typer.Typer(
     name="inbox-agent",
     help="Analyze email priority with explainable rules and an optional LLM.",
@@ -151,11 +162,13 @@ workflow_app = typer.Typer(
 service_app = typer.Typer(
     help="Run one single-instance local scheduler; Ctrl+C stops it gracefully."
 )
+web_app = typer.Typer(help="Run the loopback-only API and console with managed graceful shutdown.")
 app.add_typer(outlook_app, name="outlook")
 app.add_typer(actions_app, name="actions")
 app.add_typer(database_app, name="db")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(service_app, name="service")
+app.add_typer(web_app, name="web")
 
 
 def _console() -> Console:
@@ -1299,6 +1312,34 @@ def service_status(
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error
     _render_service_status(report, output_format)
+
+
+@web_app.command("start")
+def web_start(
+    port: Annotated[
+        int,
+        typer.Option("--port", min=1, max=65535, help="Loopback TCP port."),
+    ] = 8765,
+    log_level: Annotated[
+        WebLogLevel,
+        typer.Option("--log-level", help="Uvicorn log level."),
+    ] = WebLogLevel.INFO,
+) -> None:
+    """Start the managed local Web process on 127.0.0.1."""
+
+    typer.echo(
+        f"InboxPilot Web started at http://127.0.0.1:{port}/console; "
+        "use the page controls for background mode or full exit.",
+        err=True,
+    )
+    try:
+        run_web_server(
+            WebSettings.from_environment(),
+            port=port,
+            log_level=log_level.value,
+        )
+    except KeyboardInterrupt:
+        typer.echo("InboxPilot Web stopped gracefully.", err=True)
 
 
 @app.command()

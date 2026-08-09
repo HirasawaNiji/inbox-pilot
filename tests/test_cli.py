@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+import inbox_agent.cli as cli_module
 from inbox_agent.actions import (
     ActionGraphExecutionOutcome,
     ActionGraphExecutionReport,
@@ -21,12 +22,38 @@ from inbox_agent.cli import app
 from inbox_agent.graph import GraphAccessToken, GraphSyncReport
 from inbox_agent.llm import FakeLLMProvider, OpenAICompatibleProvider
 from inbox_agent.models import LLMMessageAnalysis, MessageCategory, Priority
+from inbox_agent.web import WebSettings
 
 ROOT = Path(__file__).resolve().parents[1]
 DATASET_PATH = ROOT / "data" / "samples" / "sample_emails.json"
 POLICY_PATH = ROOT / "config" / "rules.yaml"
 runner = CliRunner()
 GRAPH_CLIENT_ID = "12345678-1234-4234-8234-123456789abc"
+
+
+def test_web_start_uses_managed_loopback_launcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[WebSettings, int, str]] = []
+
+    def fake_run_web_server(
+        web_settings: WebSettings | None = None,
+        *,
+        port: int = 8765,
+        log_level: str = "info",
+    ) -> None:
+        assert web_settings is not None
+        calls.append((web_settings, port, log_level))
+
+    monkeypatch.setattr(cli_module, "run_web_server", fake_run_web_server)
+
+    result = runner.invoke(
+        app,
+        ["web", "start", "--port", "8877", "--log-level", "warning"],
+    )
+
+    assert result.exit_code == 0
+    assert "http://127.0.0.1:8877/console" in result.stderr
+    assert len(calls) == 1
+    assert calls[0][1:] == (8877, "warning")
 
 
 def write_graph_config(tmp_path: Path) -> Path:

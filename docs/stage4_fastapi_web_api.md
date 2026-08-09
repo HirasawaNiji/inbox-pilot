@@ -8,10 +8,7 @@
 
 ```powershell
 uv run inbox-agent db init
-uv run uvicorn inbox_agent.web.app:create_app `
-  --factory `
-  --host 127.0.0.1 `
-  --port 8765
+uv run inbox-agent web start --port 8765
 ```
 
 启动后可访问：
@@ -21,6 +18,10 @@ uv run uvicorn inbox_agent.web.app:create_app `
 - 健康检查：<http://127.0.0.1:8765/api/v1/health>
 
 不要把服务绑定到 `0.0.0.0`。当前版本面向单用户本地控制台，没有提供公网认证层；应用也通过 Trusted Host 中间件只接受 `localhost` 和回环地址。
+
+受管启动器固定绑定 `127.0.0.1`，并向控制台提供一个窄化的一次性优雅关闭句柄。控制台的“完全退出”需要 CSRF 与精确 `EXIT` 确认；它不提供公开 API 路由，也不会停止独立调度器或按 PID 强制杀进程。原始 Uvicorn 工厂命令仍可用于开发，但不会获得网页退出能力。
+
+同步启动/停止和内存 LLM 设置同样只暴露为 `/console` 下的 CSRF 表单，不加入公开 JSON API。网页管理器复用既有 `ServiceRunner` 与单实例锁；API Key 不进入请求日志、错误响应、SQLite 或配置文件。网站与同步默认都不启用 LLM。
 
 ## 数据来源与业务层复用
 

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · InboxPilot{% endblock %}
+{% block page_title %}{{ title }}{% endblock %}
+{% block content %}
+<section class="result-card">
+  <span class="result-icon" aria-hidden="true">✓</span>
+  <p class="eyebrow">受控操作完成</p>
+  <h2>{{ report.outcome.value }}</h2>
+  <p>动作状态：<strong>{{ report.final_status.value }}</strong></p>
+  <div class="request-stats">
+    <div><strong>{{ report.graph_read_request_count }}</strong><span>Graph GET</span></div>
+    <div><strong>{{ report.graph_write_request_count }}</strong><span>Graph PATCH</span></div>
+    {% if report.attempt_number is defined %}<div><strong>{{ report.attempt_number }}</strong><span>尝试次数</span></div>{% endif %}
+  </div>
+  {% if report.reason %}<div class="notice neutral">{{ report.reason }}</div>{% endif %}
+  <div class="form-actions centered"><a class="button primary" href="/console/actions/{{ action.action_id }}">返回动作详情</a><a class="button secondary" href="/console/actions">返回队列</a></div>
+</section>
+{% endblock %}

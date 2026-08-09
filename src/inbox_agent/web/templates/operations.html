@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}运行状态 · InboxPilot{% endblock %}
+{% block page_title %}工作流与运行状态{% endblock %}
+{% block content %}
+{% if notice == 'sync-started' %}<div class="notice success">自动同步已启动，将按本地配置立即运行并继续定时检查。</div>{% endif %}
+{% if notice == 'sync-stopping' %}<div class="notice neutral">已请求停止自动同步；若工作流正在执行，会在本次运行完成后停止。</div>{% endif %}
+<div class="content-grid operations-grid">
+  <section class="panel">
+    <div class="panel-header"><div><p class="eyebrow">最近一次运行</p><h2>工作流</h2></div>{% if workflow %}<span class="status-pill status-{{ workflow.status }}">{{ workflow.status }}</span>{% endif %}</div>
+    {% if workflow %}
+      <dl class="status-list">
+        <div><dt>Run ID</dt><dd class="monospace">{{ workflow.run_id }}</dd></div>
+        <div><dt>当前步骤</dt><dd>{{ workflow.current_step or '—' }}</dd></div>
+        <div><dt>开始</dt><dd>{{ workflow.started_at|local_datetime }}</dd></div>
+        <div><dt>完成</dt><dd>{{ workflow.finished_at|local_datetime }}</dd></div>
+      </dl>
+      {% if workflow.error_summary %}<div class="notice error">{{ workflow.error_summary }}</div>{% endif %}
+      <h3>运行计数</h3>
+      <div class="counter-grid">{% for name, value in workflow.counters.items() %}<div><strong>{{ value }}</strong><span>{{ name }}</span></div>{% endfor %}</div>
+    {% else %}
+      <div class="empty-state"><strong>还没有工作流记录</strong><p>运行 `inbox-agent workflow run` 后会在这里显示。</p></div>
+    {% endif %}
+  </section>
+  <section class="panel">
+    <div class="panel-header"><div><p class="eyebrow">后台调度</p><h2>自动同步</h2></div><span class="status-pill {{ 'success' if agent.sync_active else 'warning' }}">{{ '运行中' if agent.sync_active else '未运行' }}</span></div>
+    <dl class="status-list compact">
+      <div><dt>管理方式</dt><dd>{{ '当前网页' if agent.sync_owned else '外部终端' if agent.sync_external else '—' }}</dd></div>
+      <div><dt>同步间隔</dt><dd>{% if agent.interval_minutes %}{{ agent.interval_minutes }} 分钟{% else %}—{% endif %}</dd></div>
+      <div><dt>LLM 分析</dt><dd>{{ (agent.llm_provider.value ~ ' / ' ~ agent.llm_model) if agent.llm_enabled else '关闭（默认）' }}</dd></div>
+    </dl>
+    {% if agent.last_error %}<div class="notice error">{{ agent.last_error }}</div>{% endif %}
+    <div class="managed-controls">
+      {% if agent.sync_owned %}
+        <form method="post" action="/console/operations/sync/stop">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="button danger-secondary full" type="submit">{{ '正在停止…' if agent.sync_stopping else '停止自动同步' }}</button>
+        </form>
+      {% elif agent.sync_external %}
+        <div class="notice neutral">已有外部同步进程持有单实例锁。请在原终端停止它后，再由网页接管。</div>
+      {% elif agent.service_configured %}
+        <form method="post" action="/console/operations/sync/start">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="button primary full" type="submit">启动自动同步</button>
+        </form>
+      {% else %}
+        <div class="notice error">无法读取 config/service.local.yaml，暂不能启动同步。</div>
+      {% endif %}
+      <a class="button secondary full" href="/console/settings">配置 LLM</a>
+    </div>
+    {% if scheduler.available %}
+      <dl class="status-list">
+        {% for name, value in scheduler.report.model_dump(mode='json').items() %}
+          {% if name not in ['config_path'] %}<div><dt>{{ name }}</dt><dd>{{ value }}</dd></div>{% endif %}
+        {% endfor %}
+      </dl>
+    {% else %}
+      <div class="empty-state"><strong>调度服务尚未配置</strong><p>复制 `config/service.example.yaml` 为私有配置后即可查看状态。</p></div>
+    {% endif %}
+  </section>
+</div>
+
+{% if workflow and workflow.steps %}
+<section class="panel run-steps">
+  <div class="panel-header"><div><p class="eyebrow">可追踪过程</p><h2>运行步骤</h2></div></div>
+  <div class="timeline">
+    {% for step in workflow.steps %}
+      <article><span></span><div><strong>{{ step.get('name', step.get('step', 'workflow step')) }}</strong><small>{{ step }}</small></div></article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}
