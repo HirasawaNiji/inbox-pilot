@@ -1,96 +1,29 @@
 # InboxPilot
 
-InboxPilot 是一个面向 Microsoft 365 / Outlook 邮箱的本地、可解释邮件分流 Agent。它结合
-YAML 规则与可选的 OpenAI / DeepSeek 模型，为邮件生成 P1～P5 优先级、类别、摘要、待办事项、
-截止时间和人工复核建议，并能在明确授权后把分类安全写回 Outlook。
+InboxPilot 是一个面向 Microsoft 365 / Outlook 的本地、可解释邮件优先级 Agent。它持续读取新邮件，生成 P1～P5 优先级、类别、摘要、待办与截止时间，并通过本地 Web 控制台解释每一次判断。
 
-项目可以通过 CLI 运行，也提供只监听本机回环地址的 FastAPI 接口。默认模式完全离线；邮箱、
-LLM 和写回能力都必须由用户分别配置和授权。
+默认情况下，InboxPilot 完全离线、LLM 关闭、Outlook 写回关闭。连接邮箱、调用模型和修改邮件分类都需要用户分别配置和授权。
 
-## 功能概览
+## 核心能力
 
-- 使用 Pydantic 严格加载和标准化 JSON 邮件，清理 HTML 正文；
-- 使用 YAML 驱动的可解释规则生成 P1～P5 优先级及逐项评分原因；
-- 按置信度和冲突信号选择性调用 OpenAI 或 DeepSeek，并进行保守融合；
-- 通过 Microsoft Graph 委托登录，只读增量同步个人 Outlook 收件箱；
-- 通过人工确认队列、dry-run、幂等键和写前冲突检查控制分类写回；
-- 只允许修改一封邮件的 `categories`，不移动、不删除、不发送、不改写邮件内容；
-- 对结果不确定的写入执行零 PATCH 对账，并支持保留用户分类的受控回滚；
-- 使用 SQLite 持久化邮件、分析、动作、同步游标、工作流和服务状态；
-- 通过统一增量工作流和单实例本地调度器持续同步与分析，跳过未变化邮件；
-- 通过本地 FastAPI 查询邮件和解释结果，并复用既有审批、审计、写回、对账与回滚安全层；
-- 提供 Jinja2 + HTMX 本地控制台，展示规则/LLM/融合解释并执行受控的单动作确认；
-- 提供 50 封匿名样例、离线评测、真实 LLM 验证和完整自动化测试。
-
-## 项目状态
-
-**阶段一至阶段四已经全部完成；项目当前可视为一个功能闭环、可在个人电脑长期运行的完整 MVP。**
-
-它已经覆盖“发现新邮件 → 规则/可选 LLM 分析 → 可解释优先级 → 人工复核 → 受控写回与回滚 →
-通知、审计、诊断和恢复 → 全新环境部署”的完整链路，可以作为 Agent 开发实习和 GitHub 作品集项目展示。
-下文“当前限制与后续方向”中的内容属于产品增强和泛化工作，不影响当前 MVP 的完成状态。
-
-2026-08-09，阶段三在个人 Outlook 真实环境已完成以下验收：
-
-- 单封邮件分类写入；
-- 单封邮件真实受控回滚；
-- 3 封邮件逐封正向写入；
-- 3 封邮件逐封回滚清理；
-- 每个动作均为一次 GET、最多一次 PATCH、零自动重试；
-- 用户分类得到保留，邮件位置、主题、正文和附件状态不变。
-
-同日，阶段四步骤一至六完成自动化与本地真实链路验收：
-
-- SQLite 迁移、JSON 幂等导入和旧版本数据库升级通过；
-- 统一工作流可持久化分析结果，第二次运行会跳过内容与配置均未变化的邮件；
-- 本地调度器完成单次运行、单实例锁、状态保存、失败退避和优雅停止验收；
-- 一封新到达的真实 Outlook 邮件被只读同步并生成 `P4 / general_notice` 待确认动作；
-- 自动工作流保持 Graph 写请求为 0；人工批准后，受控执行器成功写入对应 Outlook 分类。
-- 本地 FastAPI 文档、真实 SQLite 读取、筛选、审批、预览、单动作执行、对账和回滚接口通过验收；
-- 写回与回滚接口要求显式 Action ID 确认，并继续复用既有写前检查、锁、审计和幂等控制。
-- 本地 Web 控制台完成总览、P1～P5 筛选、解释详情、人工复核、动作确认和运行状态页面；
-- 控制台使用 CSRF 校验、零写入预览和二次确认保护审批、写回与受控回滚。
-- P1/P2、可靠截止事项和工作流故障接入 Windows 本地提醒，并使用 SQLite 指纹跨重启去重；
-- 每日摘要写入私有 Markdown 文件，包含优先事项、截止日期和人工处理计数，不包含完整邮件正文。
-- 2026-08-10 完成真实 Outlook 只读通知验收：重复同步零新增分析、零重复提醒、零 Graph 写请求。
-- JSONL 结构化日志、Run ID、步骤耗时、Provider 成功率、Token、可选费用和队列积压已接入；
-- `doctor`、`stats`、`trace`、一致性 `backup` 和显式确认 `restore` 已通过 Windows 自动化验收；
-- 日志不记录 Token、API Key、邮件主题、正文、预览或原始 Provider Message ID。
-- Windows 安装、前台/后台启动、完整退出、私有配置模板和可选 Docker Compose 部署资源已补齐；
-- 2026-08-10 在不含虚拟环境、私有配置和运行数据的全新目录中完成锁定依赖安装、数据库迁移、
-  两次增量工作流、Doctor、备份/恢复、Web 健康检查与优雅退出验收。
-
-当前自动化质量基线为 441 项测试通过，覆盖率 84.83%，Ruff 和 mypy 通过。真实邮件、令牌、
-API Key、私有队列和审计日志均由 Git 忽略。
-
-| 阶段 | 结果 | 详细文档 |
-| --- | --- | --- |
-| 阶段一 | JSON 加载、标准化、规则引擎、CLI 与离线评测完成 | [阶段一验收](docs/stage1_acceptance.md) |
-| 阶段二 | 结构化 LLM、路由融合与 Outlook 只读同步完成 | [LLM Provider](docs/llm_provider.md)、[Outlook 同步](docs/microsoft_graph_sync.md) |
-| 阶段 2.5 | 50 封样例与 DeepSeek 真实验证完成 | [DeepSeek 验证](docs/stage2_5_deepseek_validation.md) |
-| 阶段三 | 人工确认、分类写回、审计、对账、回滚及真实小批量验收完成 | [单动作 CLI](docs/stage3_single_action_cli.md)、[受控回滚](docs/stage3_rollback.md) |
-| 阶段四 | SQLite、统一增量工作流、定时服务、Web API/控制台、通知、可观测性、恢复和全新环境部署验收完成 | [部署指南](docs/deployment_windows.md)、[阶段四最终验收](docs/stage4_deployment_acceptance.md) |
-
-阶段四开发步骤：
-
-- [x] 步骤一：SQLite 持久化与 Alembic 迁移；
-- [x] 步骤二：同步、导入、增量分析和动作生成的统一工作流；
-- [x] 步骤三：单实例本地调度器、状态探测与失败退避；
-- [x] 步骤四：本地 FastAPI Web API；
-- [x] 步骤五：Jinja2 + HTMX 本地 Web 控制台；
-- [x] 步骤六：本地通知与每日摘要；
-- [x] 步骤七：可观测性与故障恢复；
-- [x] 步骤八：部署文档与全新环境验收。
+- **可解释分类**：YAML 规则、可选 LLM 结果与最终融合理由完整展示；
+- **Outlook 增量同步**：通过 Microsoft Graph 委托权限只读同步个人收件箱；
+- **本地 Web 控制台**：查看优先级、分类理由、人工复核队列和运行状态；
+- **受控分类写回**：人工批准、零写入预览、精确确认、冲突检查和受控回滚；
+- **主动提醒**：高优先级邮件、临近截止事项、工作流故障和每日摘要；
+- **长期运行保障**：SQLite 持久化、单实例调度、结构化日志、诊断、备份和恢复。
 
 ## 快速开始
 
 ### 环境要求
 
-- Git
+- Windows 10/11
+- [Git](https://git-scm.com/)
 - [uv](https://docs.astral.sh/uv/)
-- Python 3.12 或更高版本；也可以由 uv 自动管理
 
-### 1. 本地安装
+Python 3.12 或更高版本可由 uv 自动管理。
+
+### 1. 安装
 
 ```powershell
 git clone https://github.com/HirasawaNiji/inbox-pilot.git
@@ -99,455 +32,103 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\Install-InboxPilot.ps1
 ```
 
-安装脚本会执行 `uv sync --locked`、生成缺失的私有配置和目录、升级数据库并运行 Doctor；
-不会覆盖已有 `.env` 或 `config/*.local.yaml`。完整步骤见 [Windows 部署指南](docs/deployment_windows.md)。
+安装脚本会同步锁定依赖、创建私有配置、初始化数据库并运行健康检查，不会覆盖已有本地配置。
 
-### 2. 运行离线 Demo
+### 2. 选择数据来源
+
+尚未连接邮箱时，可以先运行匿名离线 Demo：
 
 ```powershell
 uv run inbox-agent demo
 ```
 
-这个命令分析仓库中的 50 封匿名虚构邮件，不需要邮箱、API Key 或网络权限。
+要处理自己的邮件，请按照 [Microsoft 365 / Outlook 只读接入指南](docs/microsoft_graph_sync.md)完成应用注册、登录和首次同步。真实邮件、Token 和本地配置都保存在 Git 忽略路径中。
 
-常用输出选项：
-
-```powershell
-uv run inbox-agent demo --show-reasons
-uv run inbox-agent demo --format json
-```
-
-### 3. 分析自己的 JSON 数据集
+### 3. 启动控制台
 
 ```powershell
-uv run inbox-agent analyze path/to/messages.json `
-  --config config/rules.yaml
+.\scripts\Start-InboxPilot.ps1 -Mode Web
 ```
 
-输入必须符合 `MessageDataset` Schema。可从
-[data/samples/sample_emails.json](data/samples/sample_emails.json) 查看完整示例。规则字段、关键词、权重
-和阈值的修改方法见[规则配置指南](docs/rules_configuration.md)。
+打开 <http://127.0.0.1:8765/console>。在“运行状态”页面启动自动同步后，InboxPilot 会按照 `config/service.local.yaml` 中的时间间隔持续读取和分析新邮件。
 
-### 4. 初始化本地数据库（阶段四）
+需要关闭终端但继续运行时：
 
 ```powershell
-uv run inbox-agent db init
-uv run inbox-agent db import-json data/samples/sample_emails.json
-uv run inbox-agent db status
+.\scripts\Start-InboxPilot.ps1 -Mode Web -Background
 ```
 
-数据库默认写入 Git 忽略的 `data/private/inbox_pilot.sqlite3`。重复初始化和重复导入均安全，
-设计与验收方法见 [SQLite 持久化说明](docs/stage4_sqlite_persistence.md)。
+关闭浏览器不会停止后台服务；需要释放端口时，请在控制台中使用“完全退出”。完整安装、更新、后台运行和数据目录说明见 [Windows 部署指南](docs/deployment_windows.md)。
 
-统一执行导入、增量分析和人工确认动作生成：
+## 可选能力
 
-```powershell
-uv run inbox-agent workflow run `
-  --dataset data/samples/sample_emails.json `
-  --database data/private/stage4-test.sqlite3 `
-  --queue data/private/stage4-test-actions.json `
-  --audit-log data/private/stage4-test-audit.jsonl
+| 能力 | 默认状态 | 配置指南 |
+| --- | --- | --- |
+| OpenAI / DeepSeek 辅助分析 | 关闭 | [LLM Provider 接入](docs/llm_provider.md) |
+| Outlook 只读增量同步 | 未授权 | [Microsoft Graph 同步](docs/microsoft_graph_sync.md) |
+| Outlook 分类写回 | 关闭 | [写权限基础](docs/stage3_write_permission_foundation.md)、[单动作执行](docs/stage3_single_action_cli.md) |
+| Docker Compose | 可选 | [Windows 部署指南](docs/deployment_windows.md#可选-docker-compose) |
 
-uv run inbox-agent workflow status --database data/private/stage4-test.sqlite3
+LLM 也可以直接在 Web“设置”页面临时启用。API Key 只保存在当前 Web 进程内存中，进程退出后自动清除。
+
+## 工作方式
+
+```text
+Outlook / JSON
+      ↓
+增量同步与标准化
+      ↓
+YAML 规则 ── 可选 LLM
+      ↓          ↓
+      保守融合与可解释结果
+                 ↓
+       人工复核与动作预览
+                 ↓
+        单封写回 / 对账 / 回滚
 ```
 
-第二次运行会跳过内容与配置均未变化的邮件，且 Graph 写请求始终为 0。完整说明见
-[工作流编排指南](docs/stage4_workflow_orchestration.md)。公开样例使用独立测试路径，避免把样例动作
-混入真实 Outlook 人工确认队列。
+自动工作流只负责同步、分析和生成待确认动作，不会自动修改 Outlook。真实写回始终要求人工批准和二次确认。
 
-需要定时运行时，复制安全模板并先执行单次验收：
+## 安全与隐私
 
-```powershell
-Copy-Item config/service.example.yaml config/service.local.yaml
-uv run inbox-agent service run-once --config config/service.local.yaml
-uv run inbox-agent service status --config config/service.local.yaml
-```
+- Web 服务只监听 `127.0.0.1`，不向局域网公开；
+- 邮件、Token、API Key、数据库、日志和本地配置不会提交到 Git；
+- 只读同步与写权限使用独立配置、权限范围和加密 Token 缓存；
+- 写回只允许修改单封邮件的 `categories`，不会移动、删除、发送或改写邮件；
+- 写入前重新读取实时分类与 `changeKey`，不确定结果只允许只读对账；
+- 日志不记录邮件正文、主题、原始 Message ID、Token 或 API Key。
 
-长期运行使用 `service start`，按 `Ctrl+C` 优雅停止。配置和退避规则见
-[本地调度服务指南](docs/stage4_local_scheduler.md)。
+更完整的安全设计见 [写权限基础](docs/stage3_write_permission_foundation.md)、[执行审计与对账](docs/stage3_execution_audit_and_reconciliation.md)和[受控回滚](docs/stage3_rollback.md)。
 
-每次服务运行结束后会处理 P1/P2、可靠截止事项和工作流故障提醒，并在配置时间生成私有每日摘要。
-Windows Toast 默认不显示邮件主题或完整正文；摘要默认写入 `data/private/summaries/`。通知开关、
-时区、提醒窗口和跨重启去重说明见[本地通知与每日摘要](docs/stage4_notifications.md)。
-
-长期运行的诊断、统计、邮件追踪与备份命令：
+## 运维命令
 
 ```powershell
 uv run inbox-agent doctor
-uv run inbox-agent stats --format json
-uv run inbox-agent trace PROVIDER_MESSAGE_ID --format json
-uv run inbox-agent backup --format json
+uv run inbox-agent stats
+uv run inbox-agent backup
 ```
 
-恢复数据库属于危险操作，必须先完全停止自动同步，再使用 `restore BACKUP --confirm`。命令会验证
-调度锁、SQLite 完整性和 Revision，并在覆盖前创建安全备份。详细说明见
-[可观测性与故障恢复](docs/stage4_observability_recovery.md)。
+恢复数据库属于危险操作，需要先完全停止 InboxPilot，再显式执行 `restore BACKUP --confirm`。详细说明见 [可观测性与故障恢复](docs/stage4_observability_recovery.md)和[故障排查](docs/troubleshooting.md)。
 
-### 5. 启动本地 Web API 与控制台（阶段四）
+## 文档
 
-```powershell
-uv run inbox-agent web start --port 8765
-```
-
-浏览器打开 <http://127.0.0.1:8765/console> 使用本地控制台，或打开
-<http://127.0.0.1:8765/docs> 查看 API。当前服务面向单用户本地环境，不要绑定到 `0.0.0.0`。
-危险操作仍要求动作先获批准、查看零写入预览，并再次精确确认 Action ID。接口边界见
-[FastAPI Web API 指南](docs/stage4_fastapi_web_api.md)，页面与浏览器安全说明见
-[Web 控制台指南](docs/stage4_web_console.md)。
-
-网站启动后，首页和“运行状态”页提供“启动自动同步”按钮。它读取
-`config/service.local.yaml`（例如当前的 5 分钟间隔），复用同一个 `ServiceRunner`、文件锁和
-SQLite 状态；已有外部调度器运行时不会重复启动。也可以从网页请求停止，正在执行的工作流会先
-完成再退出。
-
-“设置”页中的 LLM 默认关闭。用户可选择 OpenAI 或 DeepSeek、填写模型 ID 和 API Key 后再
-启动同步。密钥只保存在当前 Web 进程内存中，不写 YAML、SQLite 或日志，页面也不会回显；Web
-重启后恢复为关闭状态。Provider 地址固定为官方 HTTPS 端点，避免把密钥发送到任意地址。
-
-控制台左侧提供两种退出形式：
-
-- **转入后台**：关闭网页即可，Web 服务和自动同步继续运行，端口保持占用；
-- **完全退出**：输入 `EXIT` 二次确认，先停止网页管理的同步，再优雅关闭 Web 进程并释放端口。
-  独立启动的 `service start` 调度器不会随 Web 进程退出。
-
-为了让网页持有安全的优雅关闭句柄，应使用上面的 `inbox-agent web start`。原始
-`uvicorn ...` 命令仅作为开发兼容方式，网页会拒绝对该进程执行完全退出。
-
-## 可选：接入 OpenAI 或 DeepSeek
-
-复制本地配置模板：
-
-```powershell
-Copy-Item config/llm_provider.example.yaml config/llm_provider.local.yaml
-```
-
-在 `llm_provider.local.yaml` 中选择 Provider、模型、Base URL 和读取密钥的环境变量名。密钥只放入
-当前终端环境，不要写进 YAML：
-
-```powershell
-$env:OPENAI_API_KEY = Read-Host -Prompt "请输入 OpenAI API Key" -MaskInput
-```
-
-DeepSeek 使用对应的环境变量：
-
-```powershell
-$env:DEEPSEEK_API_KEY = Read-Host -Prompt "请输入 DeepSeek API Key" -MaskInput
-```
-
-运行分析：
-
-```powershell
-uv run inbox-agent analyze data/samples/sample_emails.json `
-  --llm-config config/llm_provider.local.yaml
-```
-
-建议先执行一封低成本冒烟验证，再运行 50 封真实 Provider 评测：
-
-```powershell
-Copy-Item config/deepseek_validation.example.yaml config/deepseek_validation.local.yaml
-
-uv run inbox-agent validate-llm `
-  --llm-config config/deepseek_validation.local.yaml `
-  --limit 1
-```
-
-完整配置、结构化输出、安全边界和故障排查见[真实 LLM Provider 接入指南](docs/llm_provider.md)；
-50 封验证流程见[DeepSeek 真实验证指南](docs/stage2_5_deepseek_validation.md)。真实调用会消耗 Token
-并产生费用。
-
-## 可选：连接个人 Outlook
-
-InboxPilot 使用 Microsoft Graph 委托权限，不需要邮箱密码或客户端密钥。
-
-### 1. 配置只读同步
-
-```powershell
-Copy-Item config/graph.example.yaml config/graph.local.yaml
-```
-
-把个人 Entra 应用的 Client ID 填入 `graph.local.yaml`，然后执行：
-
-```powershell
-uv run inbox-agent outlook login --config config/graph.local.yaml
-uv run inbox-agent outlook sync --config config/graph.local.yaml
-uv run inbox-agent analyze data/private/outlook_inbox.json
-```
-
-本地配置、加密令牌缓存、Delta 状态和真实邮件都位于 Git 忽略路径。应用注册、个人 Outlook
-兼容设置和同步故障排查见[Microsoft Graph 只读同步指南](docs/microsoft_graph_sync.md)。
-
-### 2. 增量同步
-
-首次同步后再次运行同一命令即可使用 Delta 状态拉取变化：
-
-```powershell
-uv run inbox-agent outlook sync --config config/graph.local.yaml
-```
-
-同步只读取收件箱字段，不下载附件二进制内容。
-
-## 可选：把分类写回 Outlook
-
-> **警告**：本节会真实修改 Outlook 邮件分类。请先在专用测试邮件上验收，并完整阅读
-> [写权限基础](docs/stage3_write_permission_foundation.md)和
-> [单动作执行指南](docs/stage3_single_action_cli.md)。
-
-写权限使用独立配置、独立加密令牌缓存和 `Mail.ReadWrite`。它默认关闭，不能复用只读配置绕过
-确认门。
-
-### 1. 独立授权
-
-```powershell
-Copy-Item config/graph_write.example.yaml config/graph_write.local.yaml
-uv run inbox-agent outlook write-login --config config/graph_write.local.yaml
-```
-
-检查权限后，才在私有 `graph_write.local.yaml` 中把 `write_enabled` 改为 `true`。该文件已被
-`.gitignore` 排除。
-
-### 2. 生成人工确认队列
-
-```powershell
-uv run inbox-agent actions build `
-  --dataset data/private/outlook_inbox.json
-
-uv run inbox-agent actions list
-uv run inbox-agent actions show ACTION_ID --format json
-```
-
-### 3. 批准并生成零写入预览
-
-```powershell
-uv run inbox-agent actions approve ACTION_ID
-uv run inbox-agent actions apply --dry-run --format json
-```
-
-从动作详情中复制正向幂等键，重复 Action ID 解锁单封执行：
-
-```powershell
-uv run inbox-agent actions execute ACTION_ID `
-  --idempotency-key IDEMPOTENCY_KEY `
-  --confirm-action ACTION_ID `
-  --graph-config config/graph_write.local.yaml `
-  --format json
-```
-
-该命令始终先重新读取实时分类和 `changeKey`。若批准后状态发生变化，它会返回冲突并保持零
-PATCH。项目不提供批量执行入口。
-
-### 4. 处理结果不确定状态
-
-如果 PATCH 可能成功但响应未能验证，不要重新执行写入。使用一次 GET、零 PATCH 的对账命令：
-
-```powershell
-uv run inbox-agent actions reconcile ACTION_ID `
-  --idempotency-key IDEMPOTENCY_KEY `
-  --graph-config config/graph_write.local.yaml `
-  --format json
-```
-
-### 5. 受控回滚
-
-先生成回滚预览：
-
-```powershell
-uv run inbox-agent actions rollback ACTION_ID `
-  --reason "分类结果不符合预期" `
-  --dry-run `
-  --format json
-```
-
-确认恢复目标后，使用预览生成的独立回滚幂等键：
-
-```powershell
-uv run inbox-agent actions rollback-execute ACTION_ID `
-  --reason "分类结果不符合预期" `
-  --rollback-idempotency-key ROLLBACK_KEY `
-  --confirm-action ACTION_ID `
-  --graph-config config/graph_write.local.yaml `
-  --format json
-```
-
-回滚只恢复 `InboxPilot/` 命名空间，并保留实时存在的其他用户分类。结果不确定时使用
-`actions rollback-reconcile`，不要盲目重试。完整状态机和命令见
-[真实受控回滚指南](docs/stage3_rollback.md)。
-
-## 常用命令
-
-| 命令 | 用途 | 外部影响 |
-| --- | --- | --- |
-| `inbox-agent demo` | 分析 50 封公开样例 | 完全离线 |
-| `inbox-agent analyze DATASET` | 分析指定数据集 | 默认离线；配置 LLM 后调用 Provider |
-| `inbox-agent evaluate` | 与人工标签执行离线回归评测 | 完全离线 |
-| `inbox-agent validate-llm` | 验证真实 LLM Provider | 消耗 API Token |
-| `inbox-agent db init/status` | 初始化数据库或查看版本与计数 | 仅本地 SQLite |
-| `inbox-agent db import-json DATASET` | 幂等导入并标准化现有 JSON 邮件 | 仅本地 SQLite |
-| `inbox-agent workflow run` | 增量分析并生成待确认动作 | 默认离线；可选 Graph 只读和 LLM |
-| `inbox-agent workflow status` | 查看最近持久化运行状态 | 仅本地 SQLite |
-| `inbox-agent service run-once` | 使用服务配置执行一次锁定工作流 | 默认离线；可选 Graph 只读和 LLM |
-| `inbox-agent service start/status` | 启动定时服务或查看实际锁与状态 | 自动同步/分析，不自动写回 |
-| `inbox-agent doctor` | 只读检查配置、数据库、锁、日志和备份环境 | 仅读取本地状态 |
-| `inbox-agent stats/trace` | 查看运行指标或按安全哈希追踪邮件 | 仅读取本地 SQLite |
-| `inbox-agent backup` | 创建带完整性与 SHA-256 Manifest 的 SQLite 备份 | 写入私有备份目录 |
-| `inbox-agent restore BACKUP --confirm` | 在锁和完整性检查后受控恢复数据库 | 替换前自动创建私有备份 |
-| `inbox-agent web start` | 受管启动本地 Web API 与控制台 | 支持网页后台模式和优雅完全退出 |
-| `inbox-agent outlook login` | 获取只读委托授权 | 登录，不修改邮件 |
-| `inbox-agent outlook sync` | 增量同步收件箱 | Graph 只读 |
-| `inbox-agent actions build/list/show` | 管理本地动作队列 | 仅本地文件 |
-| `inbox-agent actions apply --dry-run` | 预览分类差异 | Graph 写请求为 0 |
-| `inbox-agent actions execute` | 执行一个已批准分类动作 | 最多一次 Graph PATCH |
-| `inbox-agent actions reconcile` | 对账不确定的正向写入 | 一次 GET、零 PATCH |
-| `inbox-agent actions rollback-execute` | 回滚一个成功动作 | 最多一次 Graph PATCH |
-| `inbox-agent actions rollback-reconcile` | 对账不确定的回滚 | 一次 GET、零 PATCH |
-
-查看全部参数：
-
-```powershell
-uv run inbox-agent --help
-uv run inbox-agent actions --help
-uv run inbox-agent outlook --help
-uv run inbox-agent db --help
-uv run inbox-agent workflow --help
-uv run inbox-agent service --help
-```
-
-### CLI 退出码
-
-| 退出码 | 含义 |
+| 主题 | 文档 |
 | --- | --- |
-| `0` | 成功 |
-| `1` | 配置、认证、确认门、Schema、队列或审计错误 |
-| `2` | 分析部分失败，或 Graph 操作结果为冲突、失败、未知 |
-| `3` | 离线评测或真实模型验证未达到门槛 |
+| 安装、启动与更新 | [Windows 部署指南](docs/deployment_windows.md) |
+| Outlook 只读同步 | [Microsoft Graph 同步](docs/microsoft_graph_sync.md) |
+| OpenAI / DeepSeek | [LLM Provider](docs/llm_provider.md) |
+| 规则与优先级 | [YAML 规则配置](docs/rules_configuration.md) |
+| Web 控制台 | [Web 控制台指南](docs/stage4_web_console.md) |
+| 分类写回与回滚 | [单动作执行](docs/stage3_single_action_cli.md)、[受控回滚](docs/stage3_rollback.md) |
+| 日志、诊断与恢复 | [可观测性与故障恢复](docs/stage4_observability_recovery.md) |
+| 常见问题 | [故障排查](docs/troubleshooting.md) |
+| 开发进度与验收 | [项目状态](docs/project_status.md) |
 
-## 配置文件
 
-| 文件 | 用途 |
-| --- | --- |
-| `config/rules.yaml` | 关键词、可信地址、评分权重和 P1～P5 阈值 |
-| `config/llm_routing.yaml` | 决定何时调用 LLM |
-| `config/llm_fusion.yaml` | 规则与 LLM 的保守融合策略 |
-| `config/llm_provider.example.yaml` | OpenAI / DeepSeek 本地配置模板 |
-| `config/graph.example.yaml` | Outlook 只读同步模板 |
-| `config/graph_write.example.yaml` | 默认关闭的独立写权限模板 |
-| `config/service.example.yaml` | 使用隔离测试路径的本地调度模板 |
-| `config/service.personal.example.yaml` | 默认离线、LLM 关闭的个人电脑服务模板 |
+## 项目状态
 
-所有 `*.local.yaml`、API Key、令牌和私有邮件数据都不应提交到 Git。
-
-## 安全与隐私边界
-
-- 默认运行完全离线；
-- LLM 密钥只从环境变量读取；
-- Graph 使用委托权限和 OS 加密令牌缓存；
-- 只读同步和写权限配置、作用域及令牌缓存互相隔离；
-- 写回客户端只允许 Immutable Message ID、固定 Graph 消息端点、`PATCH` 和 `categories`；
-- 每个动作必须人工批准，并使用幂等键和精确 Action ID 确认；
-- Graph 写入前重新读取分类与 `changeKey`；
-- 网络结果未知时禁止自动重试，只允许只读对账；
-- 审计日志不保存邮件正文、主题、原始 Message ID、令牌或 API Key；
-- 结构化运行日志使用邮件哈希，并集中脱敏认证信息、主题、正文和预览；
-- LLM 费用仅在用户配置当前价格后估算，未知费用不会记为零；
-- SQLite 数据库默认位于 `data/private/`，不会提交到 Git；
-- 移动、删除、发送邮件和修改主题、正文始终不在允许范围。
-
-## 项目结构
-
-```text
-inbox-pilot/
-├── config/              # 规则、LLM、Graph 公开模板
-├── data/samples/        # 50 封匿名演示邮件
-├── data/eval/           # 独立人工标签与离线 Fake 响应
-├── docs/                # 配置、架构、安全与验收文档
-├── scripts/             # Windows 安装、启动与离线部署验收
-├── src/inbox_agent/
-│   ├── actions/         # 人工确认、审计、执行、对账与回滚
-│   ├── graph/           # MSAL、Graph 同步和受限分类客户端
-│   ├── llm/             # Provider、Prompt、路由、融合与验证
-│   ├── storage/         # SQLite、SQLAlchemy Repository 与 Alembic 迁移
-│   ├── workflow/        # 增量编排、运行状态与失败隔离
-│   ├── service/         # 单实例定时运行、退避与状态探测
-│   ├── observability/   # 结构化日志、统计、诊断、备份与恢复
-│   ├── web/             # FastAPI、Jinja2/HTMX 控制台、查询与动作适配
-│   ├── loader.py        # JSON 加载与 Schema 校验
-│   ├── normalizer.py    # HTML 与字段标准化
-│   ├── rule_engine.py   # YAML 可解释规则引擎
-│   └── pipeline.py      # 规则、LLM 与融合流水线
-├── tests/               # 单元、集成、CLI 与安全回归测试
-├── Dockerfile           # 可选的非 root 容器镜像
-├── compose.yaml         # 仅发布到主机回环地址的可选服务
-├── pyproject.toml
-└── uv.lock
-```
-
-## 开发与质量检查
-
-```powershell
-uv run pytest
-uv run pytest --cov=src/inbox_agent --cov-report=term-missing
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-```
-
-提交前还建议运行：
-
-```powershell
-uv run inbox-agent evaluate
-```
-
-覆盖率最低门槛为 80%。
-
-## 文档索引
-
-### 使用与配置
-
-- [YAML 规则配置](docs/rules_configuration.md)
-- [OpenAI / DeepSeek Provider](docs/llm_provider.md)
-- [分类 Prompt](docs/classification_prompt.md)
-- [LLM 路由](docs/llm_routing.md)
-- [规则与 LLM 融合](docs/llm_fusion.md)
-- [Microsoft Graph 只读同步](docs/microsoft_graph_sync.md)
-- [阶段四 SQLite 持久化](docs/stage4_sqlite_persistence.md)
-- [阶段四统一工作流编排](docs/stage4_workflow_orchestration.md)
-- [阶段四本地调度服务](docs/stage4_local_scheduler.md)
-- [阶段四本地 FastAPI Web API](docs/stage4_fastapi_web_api.md)
-- [阶段四本地 Web 控制台](docs/stage4_web_console.md)
-- [阶段四本地通知与每日摘要](docs/stage4_notifications.md)
-- [阶段四可观测性与故障恢复](docs/stage4_observability_recovery.md)
-- [Windows 个人电脑部署](docs/deployment_windows.md)
-- [故障排查](docs/troubleshooting.md)
-
-### 分类写回与安全
-
-- [人工确认队列](docs/stage3_review_queue.md)
-- [分类 dry-run](docs/stage3_dry_run.md)
-- [单动作执行与对账 CLI](docs/stage3_single_action_cli.md)
-- [写权限与 Immutable ID](docs/stage3_write_permission_foundation.md)
-- [Graph 分类写客户端](docs/stage3_graph_category_write_client.md)
-- [受控执行器](docs/stage3_preflight_executor.md)
-- [执行审计与结果对账](docs/stage3_execution_audit_and_reconciliation.md)
-- [真实受控回滚](docs/stage3_rollback.md)
-
-### 设计与验收记录
-
-- [阶段一验收](docs/stage1_acceptance.md)
-- [LLM 语义评测](docs/llm_evaluation.md)
-- [阶段 2.5 DeepSeek 验证](docs/stage2_5_deepseek_validation.md)
-- [阶段三动作模型](docs/stage3_action_models.md)
-- [阶段三前半离线验收](docs/stage3_front_half_acceptance.md)
-- [单封 Outlook 写入验收](docs/stage3_single_message_acceptance.md)
-- [小批量 Outlook 验收](docs/stage3_small_batch_acceptance.md)
-- [阶段四部署与全新环境验收](docs/stage4_deployment_acceptance.md)
-
-## 当前限制与后续方向
-
-- 目前主要面向中文高校邮件和个人 Outlook 收件箱；
-- 尚未验证组织租户策略、共享邮箱和其他邮件文件夹；
-- 50 封公开样例和当前真实验收不能代表所有邮箱的泛化效果；
-- 当前没有操作系统开机自启或无人确认的自动批量写回；
-- HTMX 当前使用带 SRI 的固定 CDN 版本，完全离线时增强交互可能不可用，后续可改为本地托管；
-- 后续可增加 GitHub Actions、Web 演示和更大规模的匿名真实场景评测。
+项目初期开发阶段已经结束，当前版本是一个功能闭环、可在个人电脑长期运行的完整 MVP。
+详细开发阶段、真实 Outlook 验收、自动化质量基线和后续增强方向见 [项目状态与验收记录](docs/project_status.md)。
 
 ## License
 
