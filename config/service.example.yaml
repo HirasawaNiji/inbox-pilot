@@ -22,6 +22,20 @@ notifications:
   summary_lookback_hours: 24
   retry_limit: 3
 
+observability:
+  enabled: true
+  log_path: data/private/logs/inbox-pilot.jsonl
+
+  # Optional cost estimates. Provider prices change, so InboxPilot never
+  # hard-codes them. Add entries only after checking the provider's current
+  # pricing; omitted rates leave cost as "unknown" while tokens remain exact.
+  llm_pricing: []
+  # - provider: deepseek
+  #   model_name: deepseek-v4-flash
+  #   input_usd_per_million: "0.00"
+  #   cached_input_usd_per_million: "0.00"
+  #   output_usd_per_million: "0.00"
+
 workflow:
   dataset_path: data/samples/sample_emails.json
   database_path: data/private/service-test.sqlite3

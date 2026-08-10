@@ -9,6 +9,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from inbox_agent.actions.locking import ActionFileLock, ActionFileLockTimeoutError
+from inbox_agent.observability import (
+    EventOutcome,
+    ObservabilityEvent,
+    ObservabilityRecorder,
+    sanitize_text,
+)
 from inbox_agent.service.config import ServiceSettings
 from inbox_agent.service.models import (
     ServiceRunOutcome,
@@ -46,6 +52,7 @@ class ServiceRunner:
         result_processor: ResultProcessor | None = None,
         clock: Clock = _utc_now,
         waiter: Waiter | None = None,
+        observability: ObservabilityRecorder | None = None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -56,6 +63,7 @@ class ServiceRunner:
         self._stop_event = threading.Event()
         self.waiter = waiter or self._stop_event.wait
         self.repository = ServiceStateRepository(database)
+        self.observability = observability
 
     def request_stop(self) -> None:
         """Wake the scheduler and let the active workflow finish before stopping."""
@@ -158,10 +166,13 @@ class ServiceRunner:
                 next_run_at=next_run_at.isoformat() if next_run_at is not None else None,
                 last_run_id=previous.last_run_id if previous is not None else None,
                 consecutive_failures=failures,
-                last_error=f"{type(error).__name__}: {str(error)[:900]}",
+                last_error=sanitize_text(
+                    f"{type(error).__name__}: {error}",
+                    maximum_length=900,
+                ),
                 pid=os.getpid() if scheduled else None,
             )
-            return ServiceRunResult(
+            result = ServiceRunResult(
                 service_name=self.settings.service_name,
                 outcome=ServiceRunOutcome.FAILED,
                 attempted_at=attempted_at,
@@ -171,6 +182,8 @@ class ServiceRunner:
                 delay_seconds=delay,
                 next_run_at=next_run_at,
             )
+            self._record_attempt(result, finished_at)
+            return result
 
         finished_at = self.clock()
         successful = report.status is WorkflowStatus.COMPLETED
@@ -214,7 +227,7 @@ class ServiceRunner:
             last_error=None if successful else "workflow completed with isolated failures",
             pid=os.getpid() if scheduled else None,
         )
-        return ServiceRunResult(
+        result = ServiceRunResult(
             service_name=self.settings.service_name,
             outcome=outcome,
             attempted_at=attempted_at,
@@ -223,6 +236,45 @@ class ServiceRunner:
             delay_seconds=delay,
             next_run_at=next_run_at,
         )
+        self._record_attempt(result, finished_at)
+        return result
+
+    def _record_attempt(self, result: ServiceRunResult, finished_at: datetime) -> None:
+        if self.observability is None:
+            return
+        outcome = (
+            EventOutcome.SUCCEEDED
+            if result.outcome is ServiceRunOutcome.SUCCEEDED
+            else EventOutcome.COMPLETED_WITH_FAILURES
+            if result.outcome is ServiceRunOutcome.COMPLETED_WITH_FAILURES
+            else EventOutcome.FAILED
+        )
+        try:
+            self.observability.record(
+                ObservabilityEvent(
+                    occurred_at=finished_at,
+                    run_id=(
+                        result.workflow_report.run_id
+                        if result.workflow_report is not None
+                        else None
+                    ),
+                    component="service",
+                    operation="service_attempt",
+                    outcome=outcome,
+                    duration_ms=max(
+                        0,
+                        round((finished_at - result.attempted_at).total_seconds() * 1_000),
+                    ),
+                    error_type=result.error_type,
+                    details={
+                        "service_name": result.service_name,
+                        "consecutive_failures": result.consecutive_failures,
+                        "delay_seconds": result.delay_seconds,
+                    },
+                )
+            )
+        except Exception:  # noqa: BLE001 - telemetry cannot alter scheduler outcomes
+            return
 
     def _retry_delay(self, consecutive_failures: int) -> int:
         base = self.settings.interval_minutes * 60

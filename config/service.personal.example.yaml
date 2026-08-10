@@ -1,0 +1,42 @@
+# Personal-computer template. Copy to config/service.local.yaml; the target is ignored by Git.
+# The default is intentionally offline. Complete read-only Graph login before changing
+# workflow.sync_outlook to true. Automatic Outlook writeback is never enabled here.
+schema_version: "1.0"
+service_name: inbox-pilot
+interval_minutes: 15
+max_backoff_minutes: 60
+run_immediately: true
+lock_path: data/private/inbox_pilot.service.lock
+
+notifications:
+  enabled: true
+  desktop_enabled: true
+  daily_summary_enabled: true
+  output_dir: data/private/summaries
+  timezone: Asia/Shanghai
+  daily_summary_hour: 18
+  deadline_window_hours: 48
+  summary_lookback_hours: 24
+  retry_limit: 3
+
+observability:
+  enabled: true
+  log_path: data/private/logs/inbox-pilot.jsonl
+  # Provider prices change. Add verified current rates only to the private copy.
+  llm_pricing: []
+
+workflow:
+  dataset_path: data/private/outlook_inbox.json
+  database_path: data/private/inbox_pilot.sqlite3
+  action_queue_path: data/private/action_queue.json
+  audit_log_path: data/private/audit/actions.jsonl
+  policy_path: config/rules.yaml
+
+  # LLM is off by default. Set this only after configuring .env and the private provider YAML.
+  llm_config_path: null
+  llm_routing_path: config/llm_routing.yaml
+  llm_fusion_path: config/llm_fusion.yaml
+
+  # Change to true only after `inbox-agent outlook login` succeeds.
+  sync_outlook: false
+  graph_config_path: config/graph.local.yaml

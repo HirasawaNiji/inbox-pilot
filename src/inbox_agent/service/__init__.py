@@ -3,6 +3,7 @@
 from inbox_agent.service.config import (
     ServiceConfigurationError,
     ServiceNotificationSettings,
+    ServiceObservabilitySettings,
     ServiceSettings,
     ServiceWorkflowSettings,
     load_service_settings,
@@ -20,6 +21,7 @@ __all__ = [
     "ServiceAlreadyRunningError",
     "ServiceConfigurationError",
     "ServiceNotificationSettings",
+    "ServiceObservabilitySettings",
     "ServiceRunOutcome",
     "ServiceRunResult",
     "ServiceRunner",

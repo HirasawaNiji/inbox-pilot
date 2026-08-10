@@ -14,6 +14,7 @@ from inbox_agent.llm import (
 )
 from inbox_agent.models import FrozenModel
 from inbox_agent.notifications import NotificationCoordinator
+from inbox_agent.observability import ObservabilityRecorder
 from inbox_agent.service import (
     ServiceConfigurationError,
     ServiceRunner,
@@ -198,7 +199,8 @@ class WebAgentManager:
             workflow_settings = service_settings.workflow.model_copy(
                 update={"llm_config_path": None}
             )
-            runtime = workflow_settings.runtime_settings(self.settings.project_root)
+            effective_settings = service_settings.model_copy(update={"workflow": workflow_settings})
+            runtime = effective_settings.runtime_settings(self.settings.project_root)
             provider = self._build_provider()
             upgrade_database(runtime.database_path)
             database = Database(runtime.database_path)
@@ -211,7 +213,7 @@ class WebAgentManager:
                 settings=service_settings.notifications,
             )
             runner = ServiceRunner(
-                settings=service_settings.model_copy(update={"workflow": workflow_settings}),
+                settings=effective_settings,
                 database=database,
                 lock_path=service_settings.resolved_lock_path(self.settings.project_root),
                 execute_workflow=lambda: execute_workflow(
@@ -219,6 +221,11 @@ class WebAgentManager:
                     llm_provider=provider,
                 ),
                 result_processor=notifications.process,
+                observability=(
+                    ObservabilityRecorder(database, log_path=runtime.observability_log_path)
+                    if runtime.observability_enabled
+                    else None
+                ),
             )
             thread = Thread(
                 target=self._serve,

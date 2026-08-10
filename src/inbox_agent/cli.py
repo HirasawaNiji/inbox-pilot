@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -83,6 +84,13 @@ from inbox_agent.loader import DatasetLoadError, load_dataset
 from inbox_agent.models import TriageResult
 from inbox_agent.normalizer import normalize_message
 from inbox_agent.notifications import NotificationCoordinator
+from inbox_agent.observability import ObservabilityRecorder, safe_message_hash
+from inbox_agent.observability.diagnostics import DoctorLevel, run_doctor
+from inbox_agent.observability.recovery import (
+    RecoveryError,
+    create_database_backup,
+    restore_database_backup,
+)
 from inbox_agent.pipeline import AnalysisReport, OfflinePipeline, analyze_file
 from inbox_agent.rule_engine import RulePolicyError
 from inbox_agent.service import (
@@ -127,6 +135,7 @@ DEFAULT_ACTION_QUEUE_PATH = PROJECT_ROOT / "data" / "private" / "action_queue.js
 DEFAULT_ACTION_AUDIT_PATH = PROJECT_ROOT / "data" / "private" / "audit" / "actions.jsonl"
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "private" / "inbox_pilot.sqlite3"
 DEFAULT_SERVICE_PATH = PROJECT_ROOT / "config" / "service.local.yaml"
+DEFAULT_BACKUP_DIR = PROJECT_ROOT / "data" / "private" / "backups"
 
 
 class OutputFormat(StrEnum):
@@ -176,6 +185,30 @@ def _console() -> Console:
     """Create a console at invocation time so test runners can capture output."""
 
     return Console(highlight=False)
+
+
+def _render_operations_payload(
+    payload: dict[str, object],
+    output_format: OutputFormat,
+    *,
+    title: str,
+) -> None:
+    """Render privacy-safe operational data as JSON or a compact two-column table."""
+
+    if output_format is OutputFormat.JSON:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    table = Table(title=title)
+    table.add_column("Field", style="cyan", no_wrap=True)
+    table.add_column("Value")
+    for key, value in payload.items():
+        rendered = (
+            json.dumps(value, ensure_ascii=False, sort_keys=True)
+            if isinstance(value, (dict, list))
+            else str(value)
+        )
+        table.add_row(key, rendered)
+    _console().print(table)
 
 
 def _database_status_payload(database_path: Path) -> dict[str, object]:
@@ -966,6 +999,206 @@ def main(context: typer.Context) -> None:
         typer.echo(context.get_help())
 
 
+@app.command("doctor")
+def doctor(
+    database_path: Annotated[
+        Path,
+        typer.Option("--database", help="Private SQLite database to inspect read-only."),
+    ] = DEFAULT_DATABASE_PATH,
+    service_config_path: Annotated[
+        Path,
+        typer.Option("--service-config", help="Private scheduler configuration."),
+    ] = DEFAULT_SERVICE_PATH,
+    backup_dir: Annotated[
+        Path,
+        typer.Option("--backup-dir", help="Private backup directory to inspect."),
+    ] = DEFAULT_BACKUP_DIR,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Run read-only configuration, database, lock, and recovery diagnostics."""
+
+    try:
+        report = run_doctor(
+            database_path=database_path,
+            service_config_path=service_config_path,
+            project_root=PROJECT_ROOT,
+            backup_dir=backup_dir,
+        )
+    except (OSError, SQLAlchemyError, ServiceConfigurationError) as error:
+        typer.echo(f"Error: diagnostics failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    payload = report.model_dump(mode="json")
+    _render_operations_payload(payload, output_format, title="InboxPilot Doctor")
+    if any(check.level is DoctorLevel.ERROR for check in report.checks):
+        raise typer.Exit(code=1)
+    if any(check.level is DoctorLevel.WARNING for check in report.checks):
+        raise typer.Exit(code=2)
+
+
+@app.command("stats")
+def stats(
+    database_path: Annotated[
+        Path,
+        typer.Option("--database", help="Private SQLite observability database."),
+    ] = DEFAULT_DATABASE_PATH,
+    window_hours: Annotated[
+        int,
+        typer.Option("--hours", min=1, max=24 * 365, help="Aggregation lookback window."),
+    ] = 24,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Show workflow, provider, token, cost, latency, and queue statistics."""
+
+    database: Database | None = None
+    try:
+        if not database_path.is_file():
+            raise OSError(f"database does not exist: {database_path.resolve()}")
+        database = Database(database_path)
+        report = ObservabilityRecorder(database).statistics(window_hours=window_hours)
+    except (OSError, SQLAlchemyError) as error:
+        typer.echo(f"Error: statistics failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    finally:
+        if database is not None:
+            database.dispose()
+    _render_operations_payload(
+        report.model_dump(mode="json"),
+        output_format,
+        title="InboxPilot Statistics",
+    )
+
+
+@app.command("trace")
+def trace_message(
+    message_id: Annotated[
+        str,
+        typer.Argument(help="Provider message ID; it is hashed before every lookup."),
+    ],
+    database_path: Annotated[
+        Path,
+        typer.Option("--database", help="Private SQLite observability database."),
+    ] = DEFAULT_DATABASE_PATH,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Trace one message through processing without echoing its provider ID."""
+
+    database: Database | None = None
+    try:
+        if not database_path.is_file():
+            raise OSError(f"database does not exist: {database_path.resolve()}")
+        database = Database(database_path)
+        message_hash = safe_message_hash(message_id)
+        events = ObservabilityRecorder(database).trace_message(message_hash)
+    except (OSError, SQLAlchemyError) as error:
+        typer.echo(f"Error: trace failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    finally:
+        if database is not None:
+            database.dispose()
+    _render_operations_payload(
+        {
+            "message_hash": message_hash,
+            "event_count": len(events),
+            "events": [event.model_dump(mode="json") for event in events],
+        },
+        output_format,
+        title="InboxPilot Message Trace",
+    )
+
+
+@app.command("backup")
+def backup(
+    database_path: Annotated[
+        Path,
+        typer.Option("--database", help="Private SQLite database to back up."),
+    ] = DEFAULT_DATABASE_PATH,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", help="Private directory for verified backups."),
+    ] = DEFAULT_BACKUP_DIR,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Create a consistent SQLite backup and SHA-256 manifest."""
+
+    try:
+        report = create_database_backup(database_path, output_dir)
+    except (OSError, SQLAlchemyError, RecoveryError, sqlite3.Error) as error:
+        typer.echo(f"Error: backup failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    _render_operations_payload(
+        report.model_dump(mode="json"),
+        output_format,
+        title="InboxPilot Backup",
+    )
+
+
+@app.command("restore")
+def restore(
+    backup_path: Annotated[Path, typer.Argument(help="Verified SQLite backup to restore.")],
+    database_path: Annotated[
+        Path,
+        typer.Option("--database", help="Private SQLite destination database."),
+    ] = DEFAULT_DATABASE_PATH,
+    service_config_path: Annotated[
+        Path,
+        typer.Option("--service-config", help="Scheduler config used to resolve its lock."),
+    ] = DEFAULT_SERVICE_PATH,
+    backup_dir: Annotated[
+        Path,
+        typer.Option("--backup-dir", help="Directory for the automatic pre-restore backup."),
+    ] = DEFAULT_BACKUP_DIR,
+    confirm: Annotated[
+        bool,
+        typer.Option("--confirm", help="Explicitly authorize replacing the destination database."),
+    ] = False,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format: table or json."),
+    ] = OutputFormat.TABLE,
+) -> None:
+    """Restore under an explicit gate after lock and integrity checks."""
+
+    try:
+        lock_path = (
+            load_service_settings(service_config_path).resolved_lock_path(PROJECT_ROOT)
+            if service_config_path.is_file()
+            else PROJECT_ROOT / "data" / "private" / "inbox_pilot.service.lock"
+        )
+        report = restore_database_backup(
+            backup_path,
+            database_path,
+            backup_dir=backup_dir,
+            lock_path=lock_path,
+            confirmed=confirm,
+        )
+    except (
+        OSError,
+        SQLAlchemyError,
+        RecoveryError,
+        ServiceConfigurationError,
+        sqlite3.Error,
+    ) as error:
+        typer.echo(f"Error: restore failed: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    _render_operations_payload(
+        report.model_dump(mode="json"),
+        output_format,
+        title="InboxPilot Restore",
+    )
+
+
 @database_app.command("init")
 def database_init(
     database_path: Annotated[
@@ -1188,7 +1421,7 @@ def _service_runner_from_config(
     config_path: Path,
 ) -> tuple[ServiceRunner, Database]:
     settings = load_service_settings(config_path)
-    runtime = settings.workflow.runtime_settings(PROJECT_ROOT)
+    runtime = settings.runtime_settings(PROJECT_ROOT)
     upgrade_database(runtime.database_path)
     database = Database(runtime.database_path)
     notifications = NotificationCoordinator(
@@ -1203,6 +1436,11 @@ def _service_runner_from_config(
         lock_path=settings.resolved_lock_path(PROJECT_ROOT),
         execute_workflow=lambda: execute_workflow(runtime),
         result_processor=notifications.process,
+        observability=(
+            ObservabilityRecorder(database, log_path=runtime.observability_log_path)
+            if runtime.observability_enabled
+            else None
+        ),
     )
     return runner, database
 

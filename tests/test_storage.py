@@ -41,7 +41,7 @@ def test_upgrade_creates_versioned_schema_idempotently(tmp_path: Path) -> None:
 
     database = Database(path)
     try:
-        assert current_revision(database.engine) == "0004_notifications"
+        assert current_revision(database.engine) == "0005_observability"
         assert storage_counts(database).messages == 0
     finally:
         database.dispose()
@@ -98,7 +98,7 @@ def test_workflow_migration_upgrades_existing_step_one_database(tmp_path: Path) 
 
     database = Database(path)
     try:
-        assert current_revision(database.engine) == "0004_notifications"
+        assert current_revision(database.engine) == "0005_observability"
     finally:
         database.dispose()
     with sqlite3.connect(path) as connection:
@@ -120,7 +120,7 @@ def test_service_migration_upgrades_existing_workflow_database(tmp_path: Path) -
 
     database = Database(path)
     try:
-        assert current_revision(database.engine) == "0004_notifications"
+        assert current_revision(database.engine) == "0005_observability"
         with database.engine.connect() as connection:
             columns = {
                 row[1] for row in connection.exec_driver_sql("PRAGMA table_info(service_states)")
@@ -135,9 +135,7 @@ def test_service_migration_upgrades_existing_workflow_database(tmp_path: Path) -
         with database.engine.connect() as connection:
             notification_columns = {
                 row[1]
-                for row in connection.exec_driver_sql(
-                    "PRAGMA table_info(notification_deliveries)"
-                )
+                for row in connection.exec_driver_sql("PRAGMA table_info(notification_deliveries)")
             }
         assert {
             "dedupe_key",
@@ -146,6 +144,20 @@ def test_service_migration_upgrades_existing_workflow_database(tmp_path: Path) -
             "attempt_count",
             "delivered_at",
         } <= notification_columns
+        with database.engine.connect() as connection:
+            observability_columns = {
+                row[1]
+                for row in connection.exec_driver_sql("PRAGMA table_info(observability_events)")
+            }
+        assert {
+            "run_id",
+            "message_hash",
+            "operation",
+            "duration_ms",
+            "provider",
+            "input_tokens",
+            "estimated_cost_microusd",
+        } <= observability_columns
     finally:
         database.dispose()
 

@@ -142,7 +142,7 @@ def test_database_init_is_idempotent_and_reports_revision(tmp_path: Path) -> Non
     assert second.exit_code == 0
     payload = json.loads(second.stdout)
     assert payload["initialized"] is True
-    assert payload["revision"] == "0004_notifications"
+    assert payload["revision"] == "0005_observability"
     assert payload["counts"] == {
         "messages": 0,
         "analyses": 0,
@@ -264,7 +264,7 @@ def test_service_run_once_start_and_status_use_same_incremental_workflow(
     status_payload = json.loads(status.stdout)
     assert status_payload["active"] is False
     assert status_payload["persisted_status"] == "stopped"
-    assert status_payload["database_revision"] == "0004_notifications"
+    assert status_payload["database_revision"] == "0005_observability"
     assert status_payload["last_run_id"] == scheduled_payload["workflow_report"]["run_id"]
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -11,6 +12,7 @@ from pydantic import Field, ValidationError, field_validator, model_validator
 from yaml import YAMLError
 
 from inbox_agent.models import FrozenModel
+from inbox_agent.observability import LLMPricingRate
 from inbox_agent.workflow import WorkflowRuntimeSettings
 
 
@@ -80,6 +82,19 @@ class ServiceNotificationSettings(FrozenModel):
         return (project_root / self.output_dir).resolve()
 
 
+class ServiceObservabilitySettings(FrozenModel):
+    """Structured logging and optional user-maintained LLM price estimates."""
+
+    enabled: bool = True
+    log_path: Path = Path("data/private/logs/inbox-pilot.jsonl")
+    llm_pricing: tuple[LLMPricingRate, ...] = ()
+
+    def resolved_log_path(self, project_root: Path) -> Path:
+        if self.log_path.is_absolute():
+            return self.log_path.resolve()
+        return (project_root / self.log_path).resolve()
+
+
 class ServiceSettings(FrozenModel):
     """Safe single-process scheduling and retry settings."""
 
@@ -95,6 +110,7 @@ class ServiceSettings(FrozenModel):
     lock_path: Path = Path("data/private/inbox_pilot.service.lock")
     workflow: ServiceWorkflowSettings = ServiceWorkflowSettings()
     notifications: ServiceNotificationSettings = ServiceNotificationSettings()
+    observability: ServiceObservabilitySettings = ServiceObservabilitySettings()
 
     @model_validator(mode="after")
     def validate_backoff(self) -> Self:
@@ -106,6 +122,17 @@ class ServiceSettings(FrozenModel):
         if self.lock_path.is_absolute():
             return self.lock_path.resolve()
         return (project_root / self.lock_path).resolve()
+
+    def runtime_settings(self, project_root: Path) -> WorkflowRuntimeSettings:
+        """Build one workflow runtime with service-level observability policy."""
+
+        runtime = self.workflow.runtime_settings(project_root)
+        return replace(
+            runtime,
+            observability_enabled=self.observability.enabled,
+            observability_log_path=self.observability.resolved_log_path(project_root),
+            llm_pricing=self.observability.llm_pricing,
+        )
 
 
 def load_service_settings(path: Path) -> ServiceSettings:
