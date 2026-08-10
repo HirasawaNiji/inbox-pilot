@@ -167,14 +167,15 @@ API Key。LLM 失败会触发退避，失败邮件会在下一轮重新尝试。
 
 ## 数据库升级
 
-步骤三新增迁移 `0003_service`，步骤六继续升级为 `0004_notifications`。已有旧数据库无需删除：
+步骤三新增迁移 `0003_service`，步骤六升级为 `0004_notifications`，步骤七继续升级为
+`0005_observability`。已有旧数据库无需删除：
 
 ```powershell
 uv run inbox-agent db init
 uv run inbox-agent db status --format json
 ```
 
-升级只新增 `service_states` 表，不会删除邮件、分析结果、动作或工作流记录。
+升级只新增服务状态、通知去重和隐私受限的可观测性事件表，不会删除邮件、分析结果、动作或工作流记录。
 
 ## 快速验收
 
@@ -200,4 +201,4 @@ uv run inbox-agent service status `
 ```
 
 预期：第一轮分析 50 封；后续运行跳过 50 封；每次 Graph 写请求为 0；最终 `active` 为 false、
-`persisted_status` 为 `stopped`、当前 Revision 为 `0004_notifications`。
+`persisted_status` 为 `stopped`、当前 Revision 为 `0005_observability`。

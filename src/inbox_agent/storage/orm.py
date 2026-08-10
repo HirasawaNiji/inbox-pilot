@@ -153,9 +153,7 @@ class NotificationDeliveryRow(Base):
     """Privacy-safe delivery ledger used for durable notification deduplication."""
 
     __tablename__ = "notification_deliveries"
-    __table_args__ = (
-        Index("ix_notification_deliveries_status_kind", "status", "kind"),
-    )
+    __table_args__ = (Index("ix_notification_deliveries_status_kind", "status", "kind"),)
 
     dedupe_key: Mapped[str] = mapped_column(String(64), primary_key=True)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -166,3 +164,31 @@ class NotificationDeliveryRow(Base):
     last_attempt_at: Mapped[str] = mapped_column(String(40), nullable=False)
     delivered_at: Mapped[str | None] = mapped_column(String(40))
     error_summary: Mapped[str | None] = mapped_column(Text)
+
+
+class ObservabilityEventRow(Base):
+    """Privacy-bounded event used for run, provider, and message tracing."""
+
+    __tablename__ = "observability_events"
+    __table_args__ = (
+        Index("ix_observability_events_run_time", "run_id", "occurred_at"),
+        Index("ix_observability_events_message_time", "message_hash", "occurred_at"),
+        Index("ix_observability_events_provider_outcome", "provider", "outcome"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    occurred_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(64))
+    message_hash: Mapped[str | None] = mapped_column(String(64))
+    component: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    provider: Mapped[str | None] = mapped_column(String(100))
+    model_name: Mapped[str | None] = mapped_column(String(200))
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    cached_input_tokens: Mapped[int | None] = mapped_column(Integer)
+    estimated_cost_microusd: Mapped[int | None] = mapped_column(Integer)
+    error_type: Mapped[str | None] = mapped_column(String(100))
+    details_json: Mapped[str] = mapped_column(Text, nullable=False)

@@ -40,7 +40,7 @@ def inspect_service(
 ) -> ServiceStatusReport:
     """Inspect without creating or migrating a missing database."""
 
-    runtime = settings.workflow.runtime_settings(project_root)
+    runtime = settings.runtime_settings(project_root)
     lock_path = settings.resolved_lock_path(project_root)
     latest_revision = head_revision(runtime.database_path)
     active = service_is_active(lock_path)

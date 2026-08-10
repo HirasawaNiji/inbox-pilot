@@ -42,14 +42,8 @@ _WINDOWS_TOAST_SCRIPT = "\n".join(
             "::GetTemplateContent($template)"
         ),
         "$nodes = $xml.GetElementsByTagName('text')",
-        (
-            "$nodes.Item(0).AppendChild($xml.CreateTextNode("
-            "$env:INBOX_PILOT_TOAST_TITLE)) > $null"
-        ),
-        (
-            "$nodes.Item(1).AppendChild($xml.CreateTextNode("
-            "$env:INBOX_PILOT_TOAST_MESSAGE)) > $null"
-        ),
+        ("$nodes.Item(0).AppendChild($xml.CreateTextNode($env:INBOX_PILOT_TOAST_TITLE)) > $null"),
+        ("$nodes.Item(1).AppendChild($xml.CreateTextNode($env:INBOX_PILOT_TOAST_MESSAGE)) > $null"),
         "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)",
         (
             "[Windows.UI.Notifications.ToastNotificationManager]"

@@ -247,7 +247,7 @@ def test_status_combines_live_lock_and_persisted_state(tmp_path: Path) -> None:
         assert inactive.active is False
         assert inactive.persisted_status is ServiceStatus.IDLE
         assert active.active is True
-        assert active.database_revision == "0004_notifications"
+        assert active.database_revision == "0005_observability"
         assert active.needs_upgrade is False
     finally:
         database.dispose()

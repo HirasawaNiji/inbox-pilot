@@ -21,6 +21,9 @@
 | `mailbox_actions` | 最新人工动作状态 | `action_id` 唯一 |
 | `sync_cursors` | Outlook 等 Provider 的增量游标 | Provider、邮箱和文件夹作用域唯一 |
 | `workflow_runs` | 后续编排器的运行摘要 | `run_id` 唯一 |
+| `service_states` | 本地调度器最近状态与退避信息 | `service_name` 唯一 |
+| `notification_deliveries` | 通知跨重启去重与有限重试 | `dedupe_key` 唯一 |
+| `observability_events` | Run、步骤、Provider 与邮件安全哈希事件 | 按 Run、邮件哈希和 Provider 索引 |
 
 邮件正文等完整数据只存在私有数据库的 JSON 快照中。列表和状态命令只读取计数及索引字段，
 不会把正文输出到终端。
@@ -117,7 +120,7 @@ uv run inbox-agent db status --format json
 
 预期结果：
 
-- 当前 Revision 为 `0004_notifications`（旧数据库会由 Alembic 自动升级）；
+- 当前 Revision 为 `0005_observability`（旧数据库会由 Alembic 自动升级）；
 - 第一次导入 `created` 为 50；
 - 第二次导入 `unchanged` 为 50；
 - 最终 `messages` 为 50；

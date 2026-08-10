@@ -14,6 +14,7 @@ from inbox_agent.graph import (
     load_graph_settings,
 )
 from inbox_agent.llm import LLMProvider, OpenAICompatibleProvider
+from inbox_agent.observability import LLMPricingRate, ObservabilityRecorder
 from inbox_agent.pipeline import OfflinePipeline
 from inbox_agent.storage import Database, upgrade_database
 from inbox_agent.workflow.models import DatasetSyncResult, WorkflowReport
@@ -39,6 +40,9 @@ class WorkflowRuntimeSettings:
     llm_fusion_path: Path | None = None
     sync_outlook: bool = False
     graph_config_path: Path | None = None
+    observability_enabled: bool = True
+    observability_log_path: Path | None = None
+    llm_pricing: tuple[LLMPricingRate, ...] = ()
 
     def resolved(self) -> WorkflowRuntimeSettings:
         """Resolve every relative path against the project root, never the process cwd."""
@@ -68,6 +72,13 @@ class WorkflowRuntimeSettings:
                 if self.graph_config_path is not None
                 else None
             ),
+            observability_enabled=self.observability_enabled,
+            observability_log_path=(
+                _resolved(root, self.observability_log_path)
+                if self.observability_log_path is not None
+                else None
+            ),
+            llm_pricing=self.llm_pricing,
         )
 
 
@@ -102,6 +113,14 @@ def execute_workflow(
     upgrade_database(configured.database_path)
     database = Database(configured.database_path)
     try:
+        observability = (
+            ObservabilityRecorder(
+                database,
+                log_path=configured.observability_log_path,
+            )
+            if configured.observability_enabled
+            else None
+        )
         dataset_sync = None
         if configured.sync_outlook:
             if configured.graph_config_path is None:
@@ -143,6 +162,8 @@ def execute_workflow(
             action_queue_path=configured.action_queue_path,
             audit_log_path=configured.audit_log_path,
             llm_provider=provider,
+            observability=observability,
+            llm_pricing=configured.llm_pricing,
         ).run(configured.dataset_path, force=force, dataset_sync=dataset_sync)
     finally:
         database.dispose()

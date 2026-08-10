@@ -20,6 +20,14 @@ from inbox_agent.llm import LLMProvider
 from inbox_agent.loader import load_dataset
 from inbox_agent.models import MessageDataset
 from inbox_agent.normalizer import normalize_message
+from inbox_agent.observability import (
+    EventOutcome,
+    LLMPricingRate,
+    ObservabilityEvent,
+    ObservabilityRecorder,
+    estimate_llm_cost,
+    safe_message_hash,
+)
 from inbox_agent.pipeline import AnalysisFailure, AnalysisReport, OfflinePipeline
 from inbox_agent.storage import (
     AnalysisRepository,
@@ -132,11 +140,13 @@ class _RunTracker:
         run_id: str,
         started_at: datetime,
         clock: Clock,
+        observability: ObservabilityRecorder | None = None,
     ) -> None:
         self.repository = repository
         self.run_id = run_id
         self.started_at = started_at
         self.clock = clock
+        self.observability = observability
         self.steps: list[WorkflowStep] = []
         self.counters: dict[str, int] = {}
         self._save(WorkflowStatus.RUNNING, None, None)
@@ -155,25 +165,54 @@ class _RunTracker:
         skipped: bool = False,
     ) -> None:
         current = self.steps[-1]
+        finished_at = self.clock()
         self.steps[-1] = current.model_copy(
             update={
                 "status": WorkflowStepStatus.SKIPPED if skipped else WorkflowStepStatus.COMPLETED,
-                "finished_at": self.clock(),
+                "finished_at": finished_at,
                 "processed_count": processed_count,
                 "detail": detail,
             }
         )
         self._save(WorkflowStatus.RUNNING, None, None)
+        self.record(
+            ObservabilityEvent(
+                occurred_at=finished_at,
+                run_id=self.run_id,
+                component="workflow",
+                operation=current.name,
+                outcome=EventOutcome.SKIPPED if skipped else EventOutcome.SUCCEEDED,
+                duration_ms=max(
+                    0, round((finished_at - current.started_at).total_seconds() * 1_000)
+                ),
+                details={"processed_count": processed_count, "detail": detail},
+            )
+        )
 
     def fail(self, error: Exception) -> None:
         if self.steps and self.steps[-1].status is WorkflowStepStatus.RUNNING:
             current = self.steps[-1]
+            finished_at = self.clock()
             self.steps[-1] = current.model_copy(
                 update={
                     "status": WorkflowStepStatus.FAILED,
-                    "finished_at": self.clock(),
+                    "finished_at": finished_at,
                     "detail": str(error)[:500] or type(error).__name__,
                 }
+            )
+            self.record(
+                ObservabilityEvent(
+                    occurred_at=finished_at,
+                    run_id=self.run_id,
+                    component="workflow",
+                    operation=current.name,
+                    outcome=EventOutcome.FAILED,
+                    duration_ms=max(
+                        0,
+                        round((finished_at - current.started_at).total_seconds() * 1_000),
+                    ),
+                    error_type=type(error).__name__,
+                )
             )
 
     def complete(self, status: WorkflowStatus, finished_at: datetime) -> None:
@@ -182,6 +221,30 @@ class _RunTracker:
     def failed(self, error: Exception, finished_at: datetime) -> None:
         self.fail(error)
         self._save(WorkflowStatus.FAILED, None, finished_at, str(error)[:1_000])
+        self.record(
+            ObservabilityEvent(
+                occurred_at=finished_at,
+                run_id=self.run_id,
+                component="workflow",
+                operation="workflow_run",
+                outcome=EventOutcome.FAILED,
+                duration_ms=max(
+                    0,
+                    round((finished_at - self.started_at).total_seconds() * 1_000),
+                ),
+                error_type=type(error).__name__,
+            )
+        )
+
+    def record(self, event: ObservabilityEvent) -> None:
+        """Keep observability failures from changing workflow semantics."""
+
+        if self.observability is None:
+            return
+        try:
+            self.observability.record(event)
+        except Exception:  # noqa: BLE001 - telemetry is explicitly best effort
+            return
 
     def _save(
         self,
@@ -216,6 +279,8 @@ class WorkflowOrchestrator:
         llm_provider: LLMProvider | None = None,
         clock: Clock = _utc_now,
         run_id_factory: RunIdFactory = _run_id,
+        observability: ObservabilityRecorder | None = None,
+        llm_pricing: tuple[LLMPricingRate, ...] = (),
     ) -> None:
         self.database = database
         self.pipeline = pipeline
@@ -225,6 +290,8 @@ class WorkflowOrchestrator:
         self.llm_provider = llm_provider
         self.clock = clock
         self.run_id_factory = run_id_factory
+        self.observability = observability
+        self.llm_pricing = llm_pricing
 
     def run(
         self,
@@ -235,7 +302,13 @@ class WorkflowOrchestrator:
     ) -> WorkflowReport:
         run_id = self.run_id_factory()
         started_at = self.clock()
-        tracker = _RunTracker(WorkflowRunRepository(self.database), run_id, started_at, self.clock)
+        tracker = _RunTracker(
+            WorkflowRunRepository(self.database),
+            run_id,
+            started_at,
+            self.clock,
+            self.observability,
+        )
         try:
             active_dataset_path, sync_failures = self._sync_step(
                 tracker, dataset_path, dataset_sync
@@ -253,6 +326,7 @@ class WorkflowOrchestrator:
                 processed_count=analysis.processed_count,
                 detail=f"llm_failures={analysis.llm_failure_count}",
             )
+            self._record_analysis_events(tracker, analysis)
 
             persist_result = self._persist_step(tracker, eligible_dataset, analysis)
             action_result = self._action_step(
@@ -285,6 +359,24 @@ class WorkflowOrchestrator:
             }
             tracker.counters.update(counters)
             tracker.complete(status, finished_at)
+            tracker.record(
+                ObservabilityEvent(
+                    occurred_at=finished_at,
+                    run_id=run_id,
+                    component="workflow",
+                    operation="workflow_run",
+                    outcome=(
+                        EventOutcome.SUCCEEDED
+                        if status is WorkflowStatus.COMPLETED
+                        else EventOutcome.COMPLETED_WITH_FAILURES
+                    ),
+                    duration_ms=max(
+                        0,
+                        round((finished_at - started_at).total_seconds() * 1_000),
+                    ),
+                    details=counters,
+                )
+            )
             return WorkflowReport(
                 run_id=run_id,
                 status=status,
@@ -368,6 +460,17 @@ class WorkflowOrchestrator:
             try:
                 messages.save_normalized(normalize_message(message))
             except Exception as error:  # noqa: BLE001 - per-message isolation is intentional
+                tracker.record(
+                    ObservabilityEvent(
+                        occurred_at=self.clock(),
+                        run_id=tracker.run_id,
+                        message_hash=safe_message_hash(message.source_id),
+                        component="workflow",
+                        operation="message_import",
+                        outcome=EventOutcome.FAILED,
+                        error_type=type(error).__name__,
+                    )
+                )
                 failures.append(
                     WorkflowFailure(
                         message_id=message.source_id,
@@ -377,6 +480,17 @@ class WorkflowOrchestrator:
                     )
                 )
                 continue
+            tracker.record(
+                ObservabilityEvent(
+                    occurred_at=self.clock(),
+                    run_id=tracker.run_id,
+                    message_hash=safe_message_hash(message.source_id),
+                    component="workflow",
+                    operation="message_import",
+                    outcome=EventOutcome.SUCCEEDED,
+                    details={"upsert_outcome": result.outcome.value},
+                )
+            )
             current = analyses.has_current(
                 message.source,
                 message.source_id,
@@ -458,6 +572,17 @@ class WorkflowOrchestrator:
         for action in actions:
             message = messages_by_id[action.message_id]
             action_repository.upsert(source=message.source, action=action)
+            tracker.record(
+                ObservabilityEvent(
+                    occurred_at=self.clock(),
+                    run_id=tracker.run_id,
+                    message_hash=safe_message_hash(action.message_id),
+                    component="workflow",
+                    operation="action_build",
+                    outcome=EventOutcome.SUCCEEDED,
+                    details={"action_status": action.status.value},
+                )
+            )
         tracker.finish(
             processed_count=len(actions),
             detail=f"added={update.added_count}, skipped={update.skipped_count}",
@@ -468,3 +593,80 @@ class WorkflowOrchestrator:
             "skipped": update.skipped_count,
             "audit_added": audit_update.appended_count,
         }
+
+    def _record_analysis_events(
+        self,
+        tracker: _RunTracker,
+        analysis: AnalysisReport,
+    ) -> None:
+        for result in analysis.results:
+            tracker.record(
+                ObservabilityEvent(
+                    occurred_at=result.evaluated_at,
+                    run_id=tracker.run_id,
+                    message_hash=safe_message_hash(result.message_id),
+                    component="pipeline",
+                    operation="message_analysis",
+                    outcome=EventOutcome.SUCCEEDED,
+                    details={
+                        "priority": result.priority.value,
+                        "category": result.category,
+                        "requires_review": result.requires_review,
+                        "decision_source": result.decision_source.value,
+                    },
+                )
+            )
+        for failure in analysis.failures:
+            tracker.record(
+                ObservabilityEvent(
+                    occurred_at=self.clock(),
+                    run_id=tracker.run_id,
+                    message_hash=safe_message_hash(failure.message_id),
+                    component="pipeline",
+                    operation=failure.stage,
+                    outcome=EventOutcome.FAILED,
+                    error_type=failure.error_type,
+                )
+            )
+        for llm_result in analysis.llm_analyses:
+            usage = llm_result.usage
+            tracker.record(
+                ObservabilityEvent(
+                    occurred_at=llm_result.analyzed_at,
+                    run_id=tracker.run_id,
+                    message_hash=safe_message_hash(llm_result.message_id),
+                    component="llm",
+                    operation="llm_call",
+                    outcome=EventOutcome.SUCCEEDED,
+                    duration_ms=llm_result.duration_ms,
+                    provider=llm_result.provider,
+                    model_name=llm_result.model_name,
+                    input_tokens=usage.input_tokens if usage is not None else None,
+                    output_tokens=usage.output_tokens if usage is not None else None,
+                    cached_input_tokens=usage.cached_input_tokens if usage is not None else None,
+                    estimated_cost_microusd=estimate_llm_cost(
+                        self.llm_pricing,
+                        provider=llm_result.provider,
+                        model_name=llm_result.model_name,
+                        usage=usage,
+                    ),
+                )
+            )
+        for failure in analysis.llm_failures:
+            tracker.record(
+                ObservabilityEvent(
+                    occurred_at=self.clock(),
+                    run_id=tracker.run_id,
+                    message_hash=safe_message_hash(failure.message_id),
+                    component="llm",
+                    operation="llm_call",
+                    outcome=EventOutcome.FAILED,
+                    provider=(
+                        self.llm_provider.provider_name if self.llm_provider is not None else None
+                    ),
+                    model_name=(
+                        self.llm_provider.model_name if self.llm_provider is not None else None
+                    ),
+                    error_type=failure.error_type,
+                )
+            )
