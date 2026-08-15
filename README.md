@@ -1,5 +1,7 @@
 # InboxPilot
 
+[![CI](https://github.com/HirasawaNiji/inbox-pilot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/HirasawaNiji/inbox-pilot/actions/workflows/ci.yml)
+
 InboxPilot 是一个面向 Microsoft 365 / Outlook 的本地、可解释邮件优先级 Agent。它持续读取新邮件，生成 P1～P5 优先级、类别、摘要、待办与截止时间，并通过本地 Web 控制台解释每一次判断。
 
 默认情况下，InboxPilot 完全离线、LLM 关闭、Outlook 写回关闭。连接邮箱、调用模型和修改邮件分类都需要用户分别配置和授权。
