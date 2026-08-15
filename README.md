@@ -134,4 +134,4 @@ uv run inbox-agent backup
 
 ## License
 
-项目许可证将在首次公开发布前确定。
+本项目采用 [MIT License](LICENSE) 开源。
