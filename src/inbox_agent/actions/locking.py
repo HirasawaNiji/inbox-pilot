@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import importlib
 import os
+import sys
 import time
 from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, Self
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 
 class ActionFileLockError(Exception):
@@ -104,25 +109,15 @@ class ActionFileLock:
     @staticmethod
     def _acquire_handle(handle: BinaryIO) -> None:
         handle.seek(0)
-        if os.name == "nt":
-            import msvcrt
-
+        if sys.platform == "win32":
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            return
-
-        fcntl = importlib.import_module("fcntl")
-
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     @staticmethod
     def _release_handle(handle: BinaryIO) -> None:
         handle.seek(0)
-        if os.name == "nt":
-            import msvcrt
-
+        if sys.platform == "win32":
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            return
-
-        fcntl = importlib.import_module("fcntl")
-
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
