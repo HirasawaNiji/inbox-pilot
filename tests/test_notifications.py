@@ -6,6 +6,8 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from inbox_agent.loader import load_dataset
 from inbox_agent.models import Priority
 from inbox_agent.notifications import (
@@ -250,7 +252,9 @@ def test_desktop_failure_is_isolated_from_successful_workflow(tmp_path: Path) ->
         database.dispose()
 
 
-def test_windows_toast_passes_content_through_environment_not_script() -> None:
+def test_windows_toast_passes_content_through_environment_not_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, object] = {}
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -259,6 +263,7 @@ def test_windows_toast_passes_content_through_environment_not_script() -> None:
         return subprocess.CompletedProcess(command, 0, "", "")
 
     notifier = WindowsToastNotifier(runner=run, environment={})
+    monkeypatch.setattr("inbox_agent.notifications.desktop.os.name", "nt")
     notifier.show("Private title", "Private notification message")
 
     command_text = " ".join(captured["command"])  # type: ignore[arg-type]
